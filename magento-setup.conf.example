@@ -11,15 +11,15 @@ DOMAIN_NAME="example.com"
 # SERVER SETUP (setup-ubuntu24.sh)
 # All values are REQUIRED
 # ============================================================
-PHP_VERSION="8.3"                        # Required: 8.1, 8.2, or 8.3
-OPENSEARCH_VERSION="2.15"                # Required: e.g., 2.11, 2.13, 2.15
+PHP_VERSION="8.4"                        # Required: 8.1, 8.2, or 8.3
+OPENSEARCH_VERSION="3.5.0"                # Required: e.g., 2.11, 2.13, 2.15
 COMPOSER_VERSION="2"                     # Required: 1 or 2
-MARIADB_VERSION="11.8"                   # Required: e.g., 10.11, 11.4, 11.8
+MARIADB_VERSION="11.4"                   # Required: e.g., 10.11, 11.4, 11.8
 MARIADB_ROOT_PASSWORD="change-me-strong-password"  # Required: Strong password
 RESTRICTED_USER="magento"                # Required: Linux username for Magento
 SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"    # Required: Full SSH public key
 PMA_PORT="61098"                         # Required: phpMyAdmin port number
-PMA_USERNAME="pma_admin"                 # Required: phpMyAdmin username
+PMA_USERNAME="dbadmin"                 # Required: phpMyAdmin username
 PMA_PASSWORD="change-me-strong-password"  # Required: Strong password
 
 # ============================================================

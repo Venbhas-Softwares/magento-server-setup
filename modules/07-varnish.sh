@@ -97,7 +97,7 @@ User=root
 ProtectSystem=full
 ProtectHome=yes
 NoNewPrivileges=yes
-ExecStart=/usr/sbin/varnishd -j unix,user=vcache -F -a 0.0.0.0:80 -T 127.0.0.1:6082 -b 127.0.0.1:8080 -f /etc/varnish/default.vcl -S /etc/varnish/secret -s malloc,256m
+ExecStart=/usr/sbin/varnishd -j unix,user=vcache -F -a 0.0.0.0:80 -T 127.0.0.1:6082 -f /etc/varnish/default.vcl -S /etc/varnish/secret -s malloc,256m
 ExecReload=/usr/share/varnish/varnishreload.sh
 Restart=on-failure
 RestartSec=5

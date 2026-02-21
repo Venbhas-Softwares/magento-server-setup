@@ -52,7 +52,7 @@ print_message "Creating phpMyAdmin configuration tables..."
 MYSQL_PWD="${MARIADB_ROOT_PASSWORD}" mysql -uroot < "${PMA_INSTALL_DIR}/sql/create_tables.sql"
 
 print_message "Configuring phpMyAdmin..."
-PMA_BLOWFISH=$(openssl rand -hex 32)
+PMA_BLOWFISH=$(openssl rand -base64 24)
 cat > "${PMA_INSTALL_DIR}/config.inc.php" <<PMAEOF
 <?php
 \$cfg['blowfish_secret'] = '${PMA_BLOWFISH}';
