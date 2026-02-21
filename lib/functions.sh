@@ -41,7 +41,7 @@ load_config_safely() {
     local line_number=0
     local allowed_vars=(
         "DOMAIN_NAME" "PHP_VERSION" "OPENSEARCH_VERSION" "COMPOSER_VERSION"
-        "MARIADB_ROOT_PASSWORD" "RESTRICTED_USER" "SSH_PUBLIC_KEY"
+        "MARIADB_VERSION" "MARIADB_ROOT_PASSWORD" "RESTRICTED_USER" "SSH_PUBLIC_KEY"
         "PMA_USERNAME" "PMA_PASSWORD" "DB_NAME" "DB_USER" "DB_PASSWORD"
         "DB_HOST" "ADMIN_FIRSTNAME" "ADMIN_LASTNAME" "ADMIN_EMAIL"
         "ADMIN_USERNAME" "ADMIN_PASSWORD" "CURRENCY" "TIMEZONE" "LANGUAGE"
@@ -97,6 +97,7 @@ validate_server_config() {
     [[ -z "$PHP_VERSION" ]]           && missing+=("PHP_VERSION")
     [[ -z "$OPENSEARCH_VERSION" ]]    && missing+=("OPENSEARCH_VERSION")
     [[ -z "$COMPOSER_VERSION" ]]      && missing+=("COMPOSER_VERSION")
+    [[ -z "$MARIADB_VERSION" ]]       && missing+=("MARIADB_VERSION")
     [[ -z "$MARIADB_ROOT_PASSWORD" ]] && missing+=("MARIADB_ROOT_PASSWORD")
     [[ -z "$RESTRICTED_USER" ]]       && missing+=("RESTRICTED_USER")
     [[ -z "$SSH_PUBLIC_KEY" ]]        && missing+=("SSH_PUBLIC_KEY")
@@ -110,6 +111,10 @@ validate_server_config() {
     fi
     if ! [[ "$PHP_VERSION" =~ ^8\.[1-5]$ ]]; then
         echo "ERROR: Invalid PHP_VERSION '$PHP_VERSION'. Must be 8.1, 8.2, 8.3, 8.4, or 8.5"
+        exit 1
+    fi
+    if ! [[ "$MARIADB_VERSION" =~ ^(10\.[6-9]|10\.[1-9][0-9]|11\.[0-9]+)$ ]]; then
+        echo "ERROR: Invalid MARIADB_VERSION '$MARIADB_VERSION'. Must be 10.6+ or 11.x (e.g., 10.11, 11.4, 11.8)"
         exit 1
     fi
     if ! [[ "$PMA_PORT" =~ ^[0-9]+$ ]] || [ "$PMA_PORT" -lt 1 ] || [ "$PMA_PORT" -gt 65535 ]; then
@@ -139,7 +144,9 @@ validate_ssh_public_key() {
         echo "ERROR: SSH public key data is not valid base64"
         return 1
     fi
-    [[ ${#key_data} -lt 100 ]] && echo "ERROR: SSH public key appears truncated" && return 1
+    local min_len=64
+    [[ "$key_type" == "ssh-rsa" || "$key_type" == "ssh-dss" ]] && min_len=200
+    [[ ${#key_data} -lt $min_len ]] && echo "ERROR: SSH public key appears truncated" && return 1
     if command -v ssh-keygen &>/dev/null; then
         local temp_keyfile
         temp_keyfile=$(mktemp)

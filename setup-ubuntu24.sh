@@ -24,7 +24,7 @@ fi
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
-LOG_FILE="$(pwd)/setup-server-$(date +%Y%m%d-%H%M%S).log"
+LOG_FILE="${SCRIPT_DIR}/setup-server-$(date +%Y%m%d-%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 echo "Logging to: $LOG_FILE"
 
@@ -45,8 +45,7 @@ print_step "Validating configuration from $CONFIG_FILE..."
 validate_server_config
 
 print_step "Validating SSH public key format..."
-SSH_KEY_VALIDATION=$(validate_ssh_public_key "$SSH_PUBLIC_KEY")
-if [[ "$SSH_KEY_VALIDATION" != "OK" ]]; then
+if ! SSH_KEY_VALIDATION=$(validate_ssh_public_key "$SSH_PUBLIC_KEY"); then
     print_error "$SSH_KEY_VALIDATION"
     exit 1
 fi

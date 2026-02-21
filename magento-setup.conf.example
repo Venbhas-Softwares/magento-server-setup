@@ -14,6 +14,7 @@ DOMAIN_NAME="example.com"
 PHP_VERSION="8.3"                        # Required: 8.1, 8.2, or 8.3
 OPENSEARCH_VERSION="2.15"                # Required: e.g., 2.11, 2.13, 2.15
 COMPOSER_VERSION="2"                     # Required: 1 or 2
+MARIADB_VERSION="11.8"                   # Required: e.g., 10.11, 11.4, 11.8
 MARIADB_ROOT_PASSWORD="change-me-strong-password"  # Required: Strong password
 RESTRICTED_USER="magento"                # Required: Linux username for Magento
 SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"    # Required: Full SSH public key

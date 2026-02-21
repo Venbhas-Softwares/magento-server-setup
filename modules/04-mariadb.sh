@@ -1,7 +1,13 @@
 # Module 04 — MariaDB installation, hardening, and Magento optimisation
-# Uses: MARIADB_ROOT_PASSWORD, TOTAL_RAM_GB
+# Uses: MARIADB_VERSION, MARIADB_ROOT_PASSWORD, TOTAL_RAM_GB
 
-print_step "Installing MariaDB..."
+print_step "Adding official MariaDB repository (${MARIADB_VERSION})..."
+apt install -y apt-transport-https curl
+
+curl -fsSL "https://downloads.mariadb.com/MariaDB/mariadb_repo_setup" \
+    | bash -s -- --mariadb-server-version="mariadb-${MARIADB_VERSION}" --skip-maxscale
+
+print_step "Installing MariaDB ${MARIADB_VERSION}..."
 apt install -y mariadb-server mariadb-client
 
 systemctl start  mariadb

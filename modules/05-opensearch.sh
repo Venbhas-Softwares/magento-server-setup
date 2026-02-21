@@ -80,12 +80,14 @@ plugins.security.disabled: true
 bootstrap.memory_lock: false
 EOF
 
-cat > /opt/opensearch/config/jvm.options <<EOF
+mkdir -p /opt/opensearch/config/jvm.options.d
+cat > /opt/opensearch/config/jvm.options.d/heap.options <<EOF
+# Heap size override — do not edit jvm.options directly as it contains
+# required -javaagent and other bundled flags for this OpenSearch version.
 -Xms${OPENSEARCH_HEAP}m
 -Xmx${OPENSEARCH_HEAP}m
--XX:+UseG1GC
--XX:MaxGCPauseMillis=200
 EOF
+chown -R opensearch:opensearch /opt/opensearch/config/jvm.options.d
 
 cat > /etc/systemd/system/opensearch.service <<EOF
 [Unit]
