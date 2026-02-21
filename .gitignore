@@ -1,0 +1,8 @@
+.idea
+
+# Configuration files (not tracked - user-specific)
+magento-setup.conf
+
+# Log files
+setup-server-*.log
+install-magento-*.log
