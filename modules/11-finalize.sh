@@ -19,7 +19,7 @@ EOF
 
 # ── Server info file ──────────────────────────────────────────────────────────
 
-INFO_FILE="/root/server_setup_info.txt"
+INFO_FILE="${SCRIPT_DIR}/server_setup_info.txt"
 cat > "$INFO_FILE" <<EOF
 ============================================================================
 Magento Server Setup Complete!

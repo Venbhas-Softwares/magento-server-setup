@@ -213,7 +213,7 @@ The main script validates the configuration and detected hardware, then sources 
 | `08-composer.sh` | Composer installation |
 | `09-phpmyadmin.sh` | phpMyAdmin secured with HTTP Basic Auth, random port, and random URL path |
 | `10-security.sh` | UFW firewall rules, SSH hardening (key-only, password auth disabled) |
-| `11-finalize.sh` | Nginx test and restart, config persistence, info file at `/root/server_setup_info.txt` |
+| `11-finalize.sh` | Nginx test and restart, config persistence, info file at `./server_setup_info.txt` (same directory as the script) |
 
 </details>
 
