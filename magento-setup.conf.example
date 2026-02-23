@@ -44,23 +44,8 @@ DB_DUMP_PATH="/path/to/database-dump.sql.gz"
 # Supported: directory, .tar.gz, .tgz, .tar, .zip
 MEDIA_PATH="/path/to/media"
 
-# Magento crypt key — copy from app/etc/env.php on the source server.
-# If left empty, a new key is generated (warning: encrypted DB data will be unreadable)
-# (Optional — strongly recommended for production deployments)
-CRYPT_KEY=""
-
 # Admin credentials
-ADMIN_FIRSTNAME="Admin"                  # Required: admin first name
-ADMIN_LASTNAME="User"                    # Required: admin last name
-ADMIN_EMAIL="admin@example.com"          # Required: admin email address
-ADMIN_USERNAME="admin"                   # Required: admin login username
-ADMIN_PASSWORD="Admin123!"               # Required: strong admin password
 ADMIN_FRONTNAME="admin"                  # Required: admin panel URL path (e.g. admin, weddingadmin)
-
-# Locale settings
-CURRENCY="USD"                           # Required: e.g. USD, EUR, GBP
-TIMEZONE="America/Chicago"              # Required: e.g. America/New_York, Europe/London
-LANGUAGE="en_US"                         # Required: e.g. en_US, de_DE, fr_FR
 
 # ============================================================
 # GENERATED VALUES — populated automatically by the scripts

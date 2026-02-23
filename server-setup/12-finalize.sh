@@ -82,13 +82,20 @@ Services Status:
 
 Service Ports:
 - HTTP (Varnish Cache): 80
-- HTTPS: 443
+- HTTPS (Nginx SSL terminator → Varnish): 443
 - Nginx Backend: 8080 (behind Varnish)
 - phpMyAdmin: ${PMA_PORT}
 - Varnish Admin Console: 6082 (localhost only)
 - OpenSearch: 9200 (localhost only)
 - Valkey: 6379 (localhost only)
 - MariaDB: 3306 (localhost only)
+
+SSL Configuration (Cloudflare):
+- Mode:        Full (self-signed origin certificate)
+- Certificate: /etc/nginx/ssl/cloudflare.crt
+- Key:         /etc/nginx/ssl/cloudflare.key
+- Upgrade:     Replace cert/key with a Cloudflare Origin Certificate for Full (Strict)
+               Cloudflare Dashboard → SSL/TLS → Origin Server → Create Certificate
 
 Important Paths:
 - Magento Root: ${MAGENTO_DIR}
@@ -107,16 +114,18 @@ Varnish Cache Information:
 - After Magento install: export VCL from admin panel and review default.vcl
 
 Next Steps:
-1. Run install-magento.sh as the ${RESTRICTED_USER} user:
+1. Point your domain's DNS through Cloudflare (orange cloud icon enabled).
+   In Cloudflare Dashboard → SSL/TLS → set mode to "Full".
+   (Use "Full (Strict)" after replacing the cert with a Cloudflare Origin Certificate.)
+2. Run install-magento.sh as the ${RESTRICTED_USER} user:
    ssh root@YOUR_SERVER_IP -i /path/to/your/private/key
    su - ${RESTRICTED_USER}
    bash install-magento.sh
-2. After Magento installation:
+3. After Magento installation:
    a. Configure Varnish as caching backend in Magento admin
    b. Export and review /etc/varnish/default.vcl
    c. Test cache hit rate: varnishstat
-3. Access phpMyAdmin at the URL above
-4. Configure DNS to point your domain to this server
+4. Access phpMyAdmin at the URL above
 
 Security Notes:
 - Password authentication is COMPLETELY DISABLED (SSH key only)

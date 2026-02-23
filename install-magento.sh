@@ -80,7 +80,6 @@ echo "PHP Version:    ${PHP_VERSION}"
 echo "Database:       ${DB_NAME} @ ${DB_HOST}"
 echo "DB Dump:        ${DB_DUMP_PATH:-(not set — DB import will be skipped)}"
 echo "Media Path:     ${MEDIA_PATH:-(not set — media import will be skipped)}"
-echo "Crypt Key:      ${CRYPT_KEY:-(not set — a new key will be generated)}"
 echo "============================================================================"
 echo ""
 

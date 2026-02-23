@@ -23,9 +23,6 @@ Database:
 
 Admin Panel:
   URL:          http://${DOMAIN_NAME}/admin
-  Username:     ${ADMIN_USERNAME}
-  Email:        ${ADMIN_EMAIL}
-  Password:     [stored in magento-setup.conf]
 
 Deployment Log: ${LOG_FILE}
 
@@ -33,7 +30,7 @@ Post-Deployment Steps:
   1. Deploy static content (required before going live):
        su - ${RESTRICTED_USER}
        cd ${MAGENTO_DIR}
-       php bin/magento setup:static-content:deploy -f -l ${LANGUAGE}
+       php bin/magento setup:static-content:deploy -f
 
   2. Compile dependency injection (recommended for performance):
        php bin/magento setup:di:compile

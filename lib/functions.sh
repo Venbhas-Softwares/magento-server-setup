@@ -44,9 +44,8 @@ load_config_safely() {
         "MARIADB_VERSION" "MARIADB_ROOT_PASSWORD" "RESTRICTED_USER" "SSH_PUBLIC_KEY"
         "PMA_USERNAME" "PMA_PASSWORD" "PMA_PORT" "PMA_PATH"
         "DB_NAME" "DB_USER" "DB_PASSWORD" "DB_HOST"
-        "GIT_REPO_URL" "DB_DUMP_PATH" "MEDIA_PATH" "CRYPT_KEY"
-        "ADMIN_FIRSTNAME" "ADMIN_LASTNAME" "ADMIN_EMAIL"
-        "ADMIN_USERNAME" "ADMIN_PASSWORD" "ADMIN_FRONTNAME" "CURRENCY" "TIMEZONE" "LANGUAGE"
+        "GIT_REPO_URL" "DB_DUMP_PATH" "MEDIA_PATH"
+        "ADMIN_FRONTNAME"
         "MAGENTO_DIR" "MAGENTO_DEPLOYED" "MAGENTO_DEPLOY_DATE"
     )
 
@@ -172,15 +171,7 @@ validate_magento_install_config() {
     [[ -z "${DB_USER:-}" ]]               && missing+=("DB_USER")
     [[ -z "${DB_PASSWORD:-}" ]]           && missing+=("DB_PASSWORD")
     [[ -z "${DB_HOST:-}" ]]               && missing+=("DB_HOST")
-    [[ -z "${ADMIN_FIRSTNAME:-}" ]]       && missing+=("ADMIN_FIRSTNAME")
-    [[ -z "${ADMIN_LASTNAME:-}" ]]        && missing+=("ADMIN_LASTNAME")
-    [[ -z "${ADMIN_EMAIL:-}" ]]           && missing+=("ADMIN_EMAIL")
-    [[ -z "${ADMIN_USERNAME:-}" ]]        && missing+=("ADMIN_USERNAME")
-    [[ -z "${ADMIN_PASSWORD:-}" ]]        && missing+=("ADMIN_PASSWORD")
     [[ -z "${ADMIN_FRONTNAME:-}" ]]       && missing+=("ADMIN_FRONTNAME")
-    [[ -z "${CURRENCY:-}" ]]              && missing+=("CURRENCY")
-    [[ -z "${TIMEZONE:-}" ]]              && missing+=("TIMEZONE")
-    [[ -z "${LANGUAGE:-}" ]]              && missing+=("LANGUAGE")
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "ERROR: Missing required config variables in magento-setup.conf:"
@@ -188,11 +179,7 @@ validate_magento_install_config() {
         exit 1
     fi
 
-    # Warn about optional but important values
-    if [[ -z "${CRYPT_KEY:-}" ]]; then
-        print_warning "CRYPT_KEY is not set. A new random key will be generated."
-        print_warning "Encrypted data in the imported DB (passwords, tokens) may be unreadable."
-    fi
+    # Warn about optional values
     if [[ -z "${DB_DUMP_PATH:-}" ]]; then
         print_warning "DB_DUMP_PATH is not set. Database import will be skipped."
     fi

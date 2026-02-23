@@ -9,6 +9,7 @@
 #   5. Final cache flush
 #
 # Uses: MAGENTO_DIR, DOMAIN_NAME
+# Sets: web/secure/offloader_header so Magento detects HTTPS from Nginx SSL terminator
 
 _mage() {
     php "${MAGENTO_DIR}/bin/magento" "$@"
@@ -25,6 +26,10 @@ print_step "Updating store base URLs to ${DOMAIN_NAME}..."
 _mage "config:set web/unsecure/base_url 'http://${DOMAIN_NAME}/'"
 _mage "config:set web/secure/base_url   'https://${DOMAIN_NAME}/'"
 _mage "config:set web/cookie/cookie_domain ${DOMAIN_NAME}"
+
+# Tell Magento to trust the X-Forwarded-Proto header set by the Nginx SSL terminator.
+# Without this, Magento sees plain HTTP (from Varnish) and generates non-HTTPS URLs.
+_mage "config:set web/secure/offloader_header X-Forwarded-Proto"
 
 # ── Search engine — point to local OpenSearch ─────────────────────────────────
 
