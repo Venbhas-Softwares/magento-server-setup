@@ -11,50 +11,65 @@ DOMAIN_NAME="example.com"
 # SERVER SETUP (setup-ubuntu24.sh)
 # All values are REQUIRED
 # ============================================================
-PHP_VERSION="8.4"                        # Required: 8.1, 8.2, or 8.3
-OPENSEARCH_VERSION="3.5.0"                # Required: e.g., 2.11, 2.13, 2.15
-COMPOSER_VERSION="2"                     # Required: 1 or 2
+PHP_VERSION="8.4"                         # Required: 8.1, 8.2, 8.3, or 8.4
+OPENSEARCH_VERSION="3.5.0"               # Required: e.g., 2.11, 2.15, 3.5.0
+COMPOSER_VERSION="2"                     # Required: 2
 MARIADB_VERSION="11.4"                   # Required: e.g., 10.11, 11.4, 11.8
-MARIADB_ROOT_PASSWORD="change-me-strong-password"  # Required: Strong password
-RESTRICTED_USER="magento"                # Required: Linux username for Magento
-SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"    # Required: Full SSH public key
-PMA_PORT="61098"                         # Required: phpMyAdmin port number
-PMA_USERNAME="dbadmin"                 # Required: phpMyAdmin username
-PMA_PASSWORD="change-me-strong-password"  # Required: Strong password
+MARIADB_ROOT_PASSWORD="change-me-strong-password"  # Required: strong root password
+RESTRICTED_USER="magento"               # Required: Linux username for the Magento app user
+SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"    # Required: full SSH public key for root login
+PMA_PORT="61098"                         # Required: phpMyAdmin port (1–65535)
+PMA_USERNAME="dbadmin"                  # Required: phpMyAdmin username
+PMA_PASSWORD="change-me-strong-password"  # Required: phpMyAdmin password
 
 # ============================================================
-# MAGENTO INSTALLATION (install-magento.sh)
-# All values are REQUIRED
+# MAGENTO DEPLOYMENT (install-magento.sh)
+# All values are REQUIRED unless marked Optional
 # ============================================================
-DB_NAME="magento2"                       # Required: Database name
-DB_USER="magento_user"                   # Required: Database user
-DB_PASSWORD="change-me-strong-password"   # Required: Database password
-DB_HOST="localhost"                      # Required: Database host
-ADMIN_FIRSTNAME="Admin"                  # Required: Admin first name
-ADMIN_LASTNAME="User"                    # Required: Admin last name
-ADMIN_EMAIL="admin@example.com"          # Required: Admin email
-ADMIN_USERNAME="admin"                   # Required: Admin username
-ADMIN_PASSWORD="Admin123!"               # Required: Admin password (strong)
-CURRENCY="USD"                           # Required: Store currency (e.g., USD, EUR, GBP)
-TIMEZONE="America/Chicago"               # Required: Timezone (e.g., America/New_York, Europe/London)
-LANGUAGE="en_US"                         # Required: Language locale (e.g., en_US, de_DE, fr_FR)
-MAGENTO_PUBLIC_KEY="your-magento-marketplace-public-key"  # Required: From marketplace.magento.com
-MAGENTO_PRIVATE_KEY="your-magento-marketplace-private-key"  # Required: From marketplace.magento.com
-INSTALL_SSL="y"                          # Required: y or n (Install Let's Encrypt SSL)
-SSL_EMAIL="ssl@example.com"              # Required if INSTALL_SSL=y: Email for SSL notifications
+
+# Git repository (SSH URL recommended, e.g. git@github.com:org/repo.git)
+GIT_REPO_URL="git@github.com:your-org/your-magento-repo.git"
+
+# Database — restricted user with access to DB_NAME only
+DB_NAME="magento2"                       # Required: database name
+DB_USER="magento_user"                   # Required: restricted DB username
+DB_PASSWORD="change-me-strong-password"  # Required: strong DB password
+DB_HOST="localhost"                      # Required: database host
+
+# Database dump to import (Optional — leave empty to skip import)
+# Supported: plain .sql file or gzip-compressed .sql.gz file
+DB_DUMP_PATH="/path/to/database-dump.sql.gz"
+
+# Media folder to import into pub/media/ (Optional — leave empty to skip)
+# Supported: directory, .tar.gz, .tgz, .tar, .zip
+MEDIA_PATH="/path/to/media"
+
+# Magento crypt key — copy from app/etc/env.php on the source server.
+# If left empty, a new key is generated (warning: encrypted DB data will be unreadable)
+# (Optional — strongly recommended for production deployments)
+CRYPT_KEY=""
+
+# Admin credentials
+ADMIN_FIRSTNAME="Admin"                  # Required: admin first name
+ADMIN_LASTNAME="User"                    # Required: admin last name
+ADMIN_EMAIL="admin@example.com"          # Required: admin email address
+ADMIN_USERNAME="admin"                   # Required: admin login username
+ADMIN_PASSWORD="Admin123!"               # Required: strong admin password
+ADMIN_FRONTNAME="admin"                  # Required: admin panel URL path (e.g. admin, weddingadmin)
+
+# Locale settings
+CURRENCY="USD"                           # Required: e.g. USD, EUR, GBP
+TIMEZONE="America/Chicago"              # Required: e.g. America/New_York, Europe/London
+LANGUAGE="en_US"                         # Required: e.g. en_US, de_DE, fr_FR
 
 # ============================================================
-# GENERATED VALUES - Auto-populated by scripts
+# GENERATED VALUES — populated automatically by the scripts
 # Do NOT edit these manually
 # ============================================================
-# These values are generated and appended during script execution
-
 # From setup-ubuntu24.sh:
-# PMA_PATH="a1b2c3d4e5f6g7h8..."        # phpMyAdmin URL path (randomly generated)
-# MAGENTO_DIR="/var/www/example.com"    # Magento installation directory
+# PMA_PATH="a1b2c3..."       # randomly-generated phpMyAdmin URL path
+# MAGENTO_DIR="/var/www/example.com"
 
 # From install-magento.sh:
-# MAGENTO_INSTALLED="yes"                # Installation status
-# MAGENTO_BASE_URL="https://example.com/" # Store base URL
-# MAGENTO_ADMIN_URL="https://example.com/admin" # Admin panel URL
-# INSTALLATION_DATE="2026-02-17 14:30:00" # Installation completion timestamp
+# MAGENTO_DEPLOYED="yes"
+# MAGENTO_DEPLOY_DATE="..."

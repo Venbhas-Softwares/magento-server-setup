@@ -1,4 +1,5 @@
 # Module 01 — System update, essential packages, restricted user, and Magento web root
+# Sets web root ownership to restricted_user:www-data (authoritative — not repeated elsewhere).
 # Uses: RESTRICTED_USER, DOMAIN_NAME
 # Sets: MAGENTO_DIR (used by modules 08 and 11)
 

@@ -2,7 +2,7 @@
 #############################################################################
 # Magento Server Setup Script for Ubuntu 24.04
 # Main entry point — validates config, calculates resources, then sources
-# each module in modules/ automatically in numeric order.
+# each module in server-setup/ automatically in numeric order.
 # IMPORTANT: This script MUST be run as root user only
 #############################################################################
 
@@ -98,7 +98,7 @@ sleep 2
 # Modules are sourced (not executed) so they inherit all variables above and
 # can set variables that later modules will see.
 
-MODULES_DIR="${SCRIPT_DIR}/modules"
+MODULES_DIR="${SCRIPT_DIR}/server-setup"
 for module in "${MODULES_DIR}"/[0-9][0-9]-*.sh; do
     echo ""
     print_step "━━━ Module: $(basename "$module") ━━━"

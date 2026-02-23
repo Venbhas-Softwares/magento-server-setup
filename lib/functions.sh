@@ -42,12 +42,12 @@ load_config_safely() {
     local allowed_vars=(
         "DOMAIN_NAME" "PHP_VERSION" "OPENSEARCH_VERSION" "COMPOSER_VERSION"
         "MARIADB_VERSION" "MARIADB_ROOT_PASSWORD" "RESTRICTED_USER" "SSH_PUBLIC_KEY"
-        "PMA_USERNAME" "PMA_PASSWORD" "DB_NAME" "DB_USER" "DB_PASSWORD"
-        "DB_HOST" "ADMIN_FIRSTNAME" "ADMIN_LASTNAME" "ADMIN_EMAIL"
-        "ADMIN_USERNAME" "ADMIN_PASSWORD" "CURRENCY" "TIMEZONE" "LANGUAGE"
-        "MAGENTO_PUBLIC_KEY" "MAGENTO_PRIVATE_KEY" "INSTALL_SSL" "SSL_EMAIL"
-        "PMA_PORT" "PMA_PATH" "MAGENTO_DIR" "MAGENTO_INSTALLED"
-        "MAGENTO_BASE_URL" "MAGENTO_ADMIN_URL" "INSTALLATION_DATE"
+        "PMA_USERNAME" "PMA_PASSWORD" "PMA_PORT" "PMA_PATH"
+        "DB_NAME" "DB_USER" "DB_PASSWORD" "DB_HOST"
+        "GIT_REPO_URL" "DB_DUMP_PATH" "MEDIA_PATH" "CRYPT_KEY"
+        "ADMIN_FIRSTNAME" "ADMIN_LASTNAME" "ADMIN_EMAIL"
+        "ADMIN_USERNAME" "ADMIN_PASSWORD" "ADMIN_FRONTNAME" "CURRENCY" "TIMEZONE" "LANGUAGE"
+        "MAGENTO_DIR" "MAGENTO_DEPLOYED" "MAGENTO_DEPLOY_DATE"
     )
 
     while IFS= read -r line; do
@@ -160,6 +160,45 @@ validate_ssh_public_key() {
     fi
     echo "OK"
     return 0
+}
+
+validate_magento_install_config() {
+    local missing=()
+    [[ -z "${DOMAIN_NAME:-}" ]]           && missing+=("DOMAIN_NAME")
+    [[ -z "${RESTRICTED_USER:-}" ]]       && missing+=("RESTRICTED_USER")
+    [[ -z "${MARIADB_ROOT_PASSWORD:-}" ]] && missing+=("MARIADB_ROOT_PASSWORD")
+    [[ -z "${GIT_REPO_URL:-}" ]]          && missing+=("GIT_REPO_URL")
+    [[ -z "${DB_NAME:-}" ]]               && missing+=("DB_NAME")
+    [[ -z "${DB_USER:-}" ]]               && missing+=("DB_USER")
+    [[ -z "${DB_PASSWORD:-}" ]]           && missing+=("DB_PASSWORD")
+    [[ -z "${DB_HOST:-}" ]]               && missing+=("DB_HOST")
+    [[ -z "${ADMIN_FIRSTNAME:-}" ]]       && missing+=("ADMIN_FIRSTNAME")
+    [[ -z "${ADMIN_LASTNAME:-}" ]]        && missing+=("ADMIN_LASTNAME")
+    [[ -z "${ADMIN_EMAIL:-}" ]]           && missing+=("ADMIN_EMAIL")
+    [[ -z "${ADMIN_USERNAME:-}" ]]        && missing+=("ADMIN_USERNAME")
+    [[ -z "${ADMIN_PASSWORD:-}" ]]        && missing+=("ADMIN_PASSWORD")
+    [[ -z "${ADMIN_FRONTNAME:-}" ]]       && missing+=("ADMIN_FRONTNAME")
+    [[ -z "${CURRENCY:-}" ]]              && missing+=("CURRENCY")
+    [[ -z "${TIMEZONE:-}" ]]              && missing+=("TIMEZONE")
+    [[ -z "${LANGUAGE:-}" ]]              && missing+=("LANGUAGE")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "ERROR: Missing required config variables in magento-setup.conf:"
+        for var in "${missing[@]}"; do echo "  - $var"; done
+        exit 1
+    fi
+
+    # Warn about optional but important values
+    if [[ -z "${CRYPT_KEY:-}" ]]; then
+        print_warning "CRYPT_KEY is not set. A new random key will be generated."
+        print_warning "Encrypted data in the imported DB (passwords, tokens) may be unreadable."
+    fi
+    if [[ -z "${DB_DUMP_PATH:-}" ]]; then
+        print_warning "DB_DUMP_PATH is not set. Database import will be skipped."
+    fi
+    if [[ -z "${MEDIA_PATH:-}" ]]; then
+        print_warning "MEDIA_PATH is not set. Media import will be skipped."
+    fi
 }
 
 validate_system_resources() {

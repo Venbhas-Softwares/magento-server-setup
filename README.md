@@ -196,7 +196,7 @@ The scripts append these to `magento-setup.conf` automatically after running:
 
 ### `setup-ubuntu24.sh` — Server provisioning
 
-The main script validates the configuration and detected hardware, then sources each numbered module in `modules/` in order:
+The main script validates the configuration and detected hardware, then sources each numbered module in `server-setup/` in order:
 
 <details>
 <summary><strong>View all modules</strong></summary>
@@ -351,7 +351,7 @@ magento-server-setup/
 ├── magento-setup.conf          # Your configuration — NOT committed (add to .gitignore)
 ├── lib/
 │   └── functions.sh            # Shared helpers: output, config loader, validators
-└── modules/
+└── server-setup/
     ├── 01-system.sh            # System packages, restricted user, web root
     ├── 02-nginx.sh             # Nginx
     ├── 03-php.sh               # PHP-FPM

@@ -39,6 +39,7 @@ Restricted User (Application User):
 - Access Method: su - ${RESTRICTED_USER} (from root session)
 - Permissions: NO sudo access (truly restricted for application use only)
 - Purpose: Running Magento application and managing application files
+- Git Deploy Key (public): ${RESTRICTED_USER_SSH_PUBKEY}
 
 Root User (Administrative Access):
 - SSH Key: Configured (key-based authentication only)
