@@ -48,7 +48,7 @@ Root User (Administrative Access):
 
 Software Versions:
 - PHP: ${PHP_VERSION}
-- MariaDB: $(mysql --version | awk '{print $5}' | cut -d- -f1)
+- MariaDB: $(mariadb --version | awk '{print $5}' | cut -d- -f1)
 - OpenSearch: ${OPENSEARCH_VERSION}
 - Composer: ${COMPOSER_VERSION}
 - Nginx: $(nginx -v 2>&1 | cut -d/ -f2)
@@ -64,7 +64,7 @@ PHP Configuration:
 
 Database Information:
 - MariaDB Root Password: [STORED SECURELY IN CONFIG]
-- Connection: mysql -uroot -p
+- Connection: mariadb -uroot -p
 
 phpMyAdmin Access:
 - URL: http://YOUR_SERVER_IP:${PMA_PORT}/${PMA_PATH}

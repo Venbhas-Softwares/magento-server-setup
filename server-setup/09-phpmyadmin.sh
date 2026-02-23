@@ -49,7 +49,7 @@ mkdir -p "${PMA_INSTALL_DIR}/tmp"
 chmod 777 "${PMA_INSTALL_DIR}/tmp"
 
 print_message "Creating phpMyAdmin configuration tables..."
-MYSQL_PWD="${MARIADB_ROOT_PASSWORD}" mysql -uroot < "${PMA_INSTALL_DIR}/sql/create_tables.sql"
+MARIADB_PWD="${MARIADB_ROOT_PASSWORD}" mariadb -uroot < "${PMA_INSTALL_DIR}/sql/create_tables.sql"
 
 print_message "Configuring phpMyAdmin..."
 PMA_BLOWFISH=$(openssl rand -base64 24)

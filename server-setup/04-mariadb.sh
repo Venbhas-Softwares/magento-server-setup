@@ -23,7 +23,7 @@ password='${MARIADB_ROOT_PASSWORD}'
 MYCNF
 chmod 600 "$MYSQL_CREDS"
 
-mysql --defaults-file="$MYSQL_CREDS" <<MYSQLEOF
+mariadb --defaults-file="$MYSQL_CREDS" <<MYSQLEOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${MARIADB_ROOT_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');

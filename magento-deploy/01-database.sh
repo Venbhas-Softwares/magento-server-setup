@@ -4,7 +4,7 @@
 
 print_step "Creating database '${DB_NAME}' and restricted user '${DB_USER}'@'${DB_HOST}'..."
 
-mysql -uroot -p"${MARIADB_ROOT_PASSWORD}" <<MYSQL_EOF
+mariadb -uroot -p"${MARIADB_ROOT_PASSWORD}" <<MYSQL_EOF
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;

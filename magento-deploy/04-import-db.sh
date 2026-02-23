@@ -16,12 +16,12 @@ else
     print_message "Source: ${DB_DUMP_PATH}"
 
     if [[ "${DB_DUMP_PATH}" == *.gz ]]; then
-        zcat "${DB_DUMP_PATH}" | mysql -uroot -p"${MARIADB_ROOT_PASSWORD}" "${DB_NAME}"
+        zcat "${DB_DUMP_PATH}" | mariadb -uroot -p"${MARIADB_ROOT_PASSWORD}" "${DB_NAME}"
     else
-        mysql -uroot -p"${MARIADB_ROOT_PASSWORD}" "${DB_NAME}" < "${DB_DUMP_PATH}"
+        mariadb -uroot -p"${MARIADB_ROOT_PASSWORD}" "${DB_NAME}" < "${DB_DUMP_PATH}"
     fi
 
-    _table_count=$(mysql -uroot -p"${MARIADB_ROOT_PASSWORD}" -N -e \
+    _table_count=$(mariadb -uroot -p"${MARIADB_ROOT_PASSWORD}" -N -e \
         "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}';" 2>/dev/null || echo 0)
     print_message "Database import complete — ${_table_count} tables in '${DB_NAME}'."
 fi

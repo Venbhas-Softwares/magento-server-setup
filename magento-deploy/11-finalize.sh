@@ -27,19 +27,17 @@ Admin Panel:
 Deployment Log: ${LOG_FILE}
 
 Post-Deployment Steps:
-  1. Deploy static content (required before going live):
+  1. Activate Nginx vhost (run as root):
+       sed -i 's|# include ${MAGENTO_DIR}/nginx.conf;|include ${MAGENTO_DIR}/nginx.conf;|' /etc/nginx/sites-available/${DOMAIN_NAME}
+       nginx -t && systemctl reload nginx
+
+  2. Deploy static content (required before going live):
        su - ${RESTRICTED_USER}
        cd ${MAGENTO_DIR}
        php bin/magento setup:static-content:deploy -f
 
-  2. Compile dependency injection (recommended for performance):
+  3. Compile dependency injection (recommended for performance):
        php bin/magento setup:di:compile
-
-  3. Set up SSL:
-       certbot --nginx -d ${DOMAIN_NAME} --email <your-email> --agree-tos --non-interactive
-       php bin/magento config:set web/secure/use_in_frontend 1
-       php bin/magento config:set web/secure/use_in_adminhtml 1
-       php bin/magento cache:flush
 
   4. Switch to production mode when ready:
        php bin/magento deploy:mode:set production
