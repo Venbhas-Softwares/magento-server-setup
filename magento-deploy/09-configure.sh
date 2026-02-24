@@ -38,7 +38,7 @@ _mage config:set catalog/search/engine                     opensearch
 _mage config:set catalog/search/opensearch_server_hostname 127.0.0.1
 _mage config:set catalog/search/opensearch_server_port     9200
 _mage config:set catalog/search/opensearch_index_prefix    magento2
-_mage config:set catalog/search/opensearch_timeout         15
+_mage config:set catalog/search/opensearch_server_timeout  15
 
 _mage cache:flush
 

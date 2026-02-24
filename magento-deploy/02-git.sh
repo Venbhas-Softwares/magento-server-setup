@@ -5,6 +5,8 @@
 
 print_step "Preparing Magento directory: ${MAGENTO_DIR}"
 mkdir -p "${MAGENTO_DIR}"
+find "${MAGENTO_DIR}" -mindepth 1 -delete
+print_message "Directory cleared: ${MAGENTO_DIR}"
 
 print_step "Cloning repository: ${GIT_REPO_URL}"
 git clone "${GIT_REPO_URL}" "${MAGENTO_DIR}"
