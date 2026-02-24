@@ -1,4 +1,4 @@
-# Module 11 — Nginx SSL termination for Cloudflare Full / Full (Strict) mode
+# Module 11 — Nginx SSL termination (HTTPS :443 → Varnish :80)
 #
 # Adds an Nginx server block on port 443 that terminates TLS and proxies to
 # Varnish on port 80. Also ensures PHP-FPM receives the X-Forwarded-Proto
@@ -32,7 +32,7 @@ print_message "Certificate: /etc/nginx/ssl/cloudflare.crt (valid 10 years)"
 # Sets X-Forwarded-Proto: https so Varnish and Magento detect the original scheme.
 
 print_step "Creating Nginx SSL terminator on port 443..."
-cat > /etc/nginx/sites-available/cloudflare-ssl <<EOF
+cat > /etc/nginx/sites-available/ssl-terminator <<EOF
 server {
     listen 443 ssl;
     server_name ${DOMAIN_NAME} www.${DOMAIN_NAME};
@@ -58,7 +58,7 @@ server {
 }
 EOF
 
-ln -sf /etc/nginx/sites-available/cloudflare-ssl /etc/nginx/sites-enabled/
+ln -sf /etc/nginx/sites-available/ssl-terminator /etc/nginx/sites-enabled/
 
 # ── FastCGI params — pass X-Forwarded-Proto to PHP-FPM ───────────────────────
 # Magento's web/secure/offloader_header reads $_SERVER['HTTP_X_FORWARDED_PROTO'].

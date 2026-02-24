@@ -88,5 +88,4 @@ print_warning "GitHub:    Settings → Deploy keys → Add deploy key"
 print_warning "GitLab:    Settings → Repository → Deploy keys"
 print_warning "Bitbucket: Repository settings → Access keys"
 echo ""
-print_warning "Press ENTER once the key has been added to continue..."
-read -r _ < /dev/tty
+print_warning "The key is also saved in server_setup_info.txt — add it before running install-magento.sh."
