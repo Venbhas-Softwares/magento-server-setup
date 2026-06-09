@@ -6,7 +6,10 @@
 # Writable:  var/ generated/ pub/static/ pub/media/ app/etc/ — dirs 770, files 660
 # Executable: bin/magento
 
-print_step "Setting file permissions on ${MAGENTO_DIR}..."
+print_step "Setting file ownership and permissions on ${MAGENTO_DIR}..."
+
+# Re-establish group ownership after git clone (which creates files as restricted_user:restricted_user)
+chown -R "${RESTRICTED_USER}:www-data" "${MAGENTO_DIR}"
 
 find "${MAGENTO_DIR}" -type d -exec chmod 750 {} +
 find "${MAGENTO_DIR}" -type f -exec chmod 640 {} +

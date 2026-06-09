@@ -83,9 +83,6 @@ echo "Media Path:     ${MEDIA_PATH:-(not set — media import will be skipped)}"
 echo "============================================================================"
 echo ""
 
-read -rp "Proceed with deployment? [y/N]: " _confirm
-[[ "${_confirm,,}" != "y" ]] && print_message "Deployment cancelled." && exit 0
-
 # ── Run modules ───────────────────────────────────────────────────────────────
 # Modules are sourced so they inherit all variables set above and can set
 # new variables visible to later modules.

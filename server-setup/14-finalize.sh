@@ -117,7 +117,8 @@ Next Steps:
 1. Point your domain's DNS through Cloudflare (orange cloud icon enabled).
    In Cloudflare Dashboard → SSL/TLS → set mode to "Full".
    (Use "Full (Strict)" after replacing the cert with a Cloudflare Origin Certificate.)
-2. Run install-magento.sh as the ${RESTRICTED_USER} user:
+2. Magento deployment runs automatically after server setup unless
+   --skip-magento-deployment was passed. To run it manually:
    ssh root@YOUR_SERVER_IP -i /path/to/your/private/key
    su - ${RESTRICTED_USER}
    bash install-magento.sh
@@ -167,10 +168,6 @@ print_warning "✓ Root login is ONLY allowed via SSH key (from config)"
 print_warning "✓ Restricted user has NO direct SSH access (su - only)"
 print_warning "✓ Restricted user has ZERO sudo access (true privilege separation)"
 echo ""
-print_message "You can now run install-magento.sh as the ${RESTRICTED_USER} user."
-echo ""
-print_message "Next Steps:"
-print_message "1. SSH in as root: ssh root@YOUR_SERVER_IP -i /path/to/your/private/key"
-print_message "2. Switch to app user: su - ${RESTRICTED_USER}"
-print_message "3. Run install-magento.sh as the ${RESTRICTED_USER} user"
+print_message "Magento deployment will start automatically as ${RESTRICTED_USER}."
+print_message "Pass --skip-magento-deployment to setup-ubuntu24.sh to skip this."
 echo ""
