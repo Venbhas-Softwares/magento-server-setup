@@ -243,3 +243,35 @@ validate_resource_allocations() {
         exit 1
     fi
 }
+
+# ── Module resolution ─────────────────────────────────────────────────────────
+# resolve_module <modules_dir> <token>
+# Accepts: numeric prefix ("03"), basename ("03-php.sh"), or full path.
+# Prints the resolved absolute path, or returns 1 on failure.
+
+resolve_module() {
+    local modules_dir="$1"
+    local token="$2"
+
+    [[ "$token" == /* ]] && echo "$token" && return 0
+
+    if [[ "$token" =~ ^[0-9]+$ ]]; then
+        local padded match
+        padded=$(printf "%02d" "$token")
+        match=$(find "$modules_dir" -maxdepth 1 -name "${padded}-*.sh" 2>/dev/null | head -1)
+        if [[ -z "$match" ]]; then
+            echo "ERROR: No module with number $token in $modules_dir" >&2
+            return 1
+        fi
+        echo "$match"
+        return 0
+    fi
+
+    if [[ "$token" != */* ]]; then
+        local candidate="${modules_dir}/${token}"
+        [[ -f "$candidate" ]] && echo "$candidate" && return 0
+    fi
+
+    local rel="${token}"
+    echo "$rel"
+}

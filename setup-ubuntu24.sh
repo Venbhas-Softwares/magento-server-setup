@@ -10,6 +10,25 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# ── Argument parsing ───────────────────────────────────────────────────────────
+
+SKIP_MAGENTO_DEPLOYMENT=false
+SELECTED_MODULES=()
+
+for _arg in "$@"; do
+    case "$_arg" in
+        --skip-magento-deployment) SKIP_MAGENTO_DEPLOYMENT=true ;;
+        --modules=*)
+            IFS=',' read -ra _tokens <<< "${_arg#--modules=}"
+            for _t in "${_tokens[@]}"; do SELECTED_MODULES+=("$_t"); done
+            ;;
+        --modules)
+            echo "ERROR: --modules requires a value: --modules=03,05,09"
+            exit 1
+            ;;
+    esac
+done
+
 # Load shared helper functions (defines print_*, add_temp_file, validators…)
 source "${SCRIPT_DIR}/lib/functions.sh"
 
@@ -99,8 +118,45 @@ sleep 2
 # can set variables that later modules will see.
 
 MODULES_DIR="${SCRIPT_DIR}/server-setup"
-for module in "${MODULES_DIR}"/[0-9][0-9]-*.sh; do
+
+if [[ ${#SELECTED_MODULES[@]} -gt 0 ]]; then
+    _modules_to_run=()
+    for _token in "${SELECTED_MODULES[@]}"; do
+        _path=$(resolve_module "$MODULES_DIR" "$_token") || exit 1
+        if [[ ! -f "$_path" ]]; then
+            echo "ERROR: Module not found: $_path"
+            exit 1
+        fi
+        _modules_to_run+=("$_path")
+    done
+else
+    _modules_to_run=("${MODULES_DIR}"/[0-9][0-9]-*.sh)
+fi
+
+for module in "${_modules_to_run[@]}"; do
     echo ""
     print_step "━━━ Module: $(basename "$module") ━━━"
     source "$module"
 done
+
+# ── Magento deployment ────────────────────────────────────────────────────────
+
+if [[ "$SKIP_MAGENTO_DEPLOYMENT" == true ]]; then
+    echo ""
+    print_message "Skipping Magento deployment (--skip-magento-deployment passed)."
+    print_message "Run install-magento.sh manually when ready:"
+    print_message "  su - ${RESTRICTED_USER}"
+    print_message "  bash ${SCRIPT_DIR}/install-magento.sh"
+else
+    echo ""
+    print_step "━━━ Starting Magento deployment as ${RESTRICTED_USER} ━━━"
+    su - "${RESTRICTED_USER}" -c "bash '${SCRIPT_DIR}/install-magento.sh'"
+
+    echo ""
+    print_step "Activating Magento Nginx routing rules..."
+    sed -i "s|# include ${MAGENTO_DIR}/nginx.conf;|include ${MAGENTO_DIR}/nginx.conf;|" \
+        "/etc/nginx/sites-available/${DOMAIN_NAME}"
+    nginx -t
+    systemctl reload nginx
+    print_message "Nginx vhost updated and reloaded."
+fi
