@@ -1,5 +1,5 @@
 # Module 08 — Composer installation
-# Uses: RESTRICTED_USER, COMPOSER_VERSION
+# Uses: RESTRICTED_USERNAME, COMPOSER_VERSION
 
 print_step "Installing Composer ${COMPOSER_VERSION}..."
 COMPOSER_INSTALLER="/tmp/composer-installer.php"
@@ -42,7 +42,7 @@ fi
 
 # Verify installation as restricted user — avoids Composer's root warning and
 # any network checks that cause hangs when run as root
-if ! sudo -u "${RESTRICTED_USER}" COMPOSER_NO_INTERACTION=1 \
+if ! sudo -u "${RESTRICTED_USERNAME}" COMPOSER_NO_INTERACTION=1 \
         /usr/local/bin/composer --version --no-interaction >/dev/null 2>&1; then
     print_error "Composer installation verification failed"
     exit 1
@@ -52,5 +52,5 @@ print_message "Composer ${COMPOSER_VERSION} installed successfully"
 chmod +x /usr/local/bin/composer
 
 print_step "Confirming Composer is accessible for restricted user..."
-sudo -u "${RESTRICTED_USER}" COMPOSER_NO_INTERACTION=1 composer --version --no-interaction \
-    >/dev/null 2>&1 && print_message "Composer is accessible for ${RESTRICTED_USER}"
+sudo -u "${RESTRICTED_USERNAME}" COMPOSER_NO_INTERACTION=1 composer --version --no-interaction \
+    >/dev/null 2>&1 && print_message "Composer is accessible for ${RESTRICTED_USERNAME}"

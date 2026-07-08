@@ -35,7 +35,6 @@ print_message "PHP resource allocation: Memory=${PHP_MEMORY_LIMIT}, MaxChildren=
 
 print_step "Installing PHP ${PHP_VERSION} and extensions..."
 add-apt-repository ppa:ondrej/php -y
-add-apt-repository ppa:ondrej/nginx -y
 apt update
 
 # php-json is built into PHP 8.0+ core.

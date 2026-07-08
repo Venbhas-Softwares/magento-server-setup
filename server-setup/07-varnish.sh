@@ -23,6 +23,15 @@ acl purge {
 }
 
 sub vcl_recv {
+    # Preserve the real client IP for the backend. Varnish's builtin vcl_recv
+    # normally appends this automatically, but every branch below returns
+    # explicitly, which skips the builtin's appended logic — set it here instead.
+    if (req.http.X-Forwarded-For) {
+        set req.http.X-Forwarded-For = req.http.X-Forwarded-For + ", " + client.ip;
+    } else {
+        set req.http.X-Forwarded-For = client.ip;
+    }
+
     if (req.method == "PURGE") {
         if (!client.ip ~ purge) {
             return (synth(405, "Not allowed"));
@@ -79,6 +88,18 @@ sub vcl_purge {
     return (synth(200, "Purged"));
 }
 EOF
+
+# ── FastCGI params — pass X-Forwarded-For to PHP-FPM ──────────────────────────
+# Nginx does not forward arbitrary headers to FastCGI unless explicitly mapped.
+# Add HTTP_X_FORWARDED_FOR so Magento (maintenance mode IP allowlist, request
+# logging) sees the real visitor IP that vcl_recv sets above, regardless of
+# whether SSL termination (module 11) is enabled.
+
+if ! grep -q "HTTP_X_FORWARDED_FOR" /etc/nginx/fastcgi_params; then
+    echo 'fastcgi_param  HTTP_X_FORWARDED_FOR  $http_x_forwarded_for;' \
+        >> /etc/nginx/fastcgi_params
+    print_message "Added HTTP_X_FORWARDED_FOR to /etc/nginx/fastcgi_params"
+fi
 
 # Move Nginx to port 8080 so Varnish can own port 80
 sed -i 's/listen 80;/listen 8080;/'                 /etc/nginx/sites-available/default 2>/dev/null || true

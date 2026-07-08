@@ -12,12 +12,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 
-SKIP_MAGENTO_DEPLOYMENT=false
 SELECTED_MODULES=()
 
 for _arg in "$@"; do
     case "$_arg" in
-        --skip-magento-deployment) SKIP_MAGENTO_DEPLOYMENT=true ;;
         --modules=*)
             IFS=',' read -ra _tokens <<< "${_arg#--modules=}"
             for _t in "${_tokens[@]}"; do SELECTED_MODULES+=("$_t"); done
@@ -49,10 +47,10 @@ echo "Logging to: $LOG_FILE"
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-CONFIG_FILE="${SCRIPT_DIR}/magento-setup.conf"
+CONFIG_FILE="${SCRIPT_DIR}/server-setup.conf"
 if [[ ! -f "$CONFIG_FILE" ]]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"
-    echo "Copy magento-setup.conf.example to magento-setup.conf and fill in your values."
+    echo "Copy server-setup.conf.example to server-setup.conf and fill in your values."
     exit 1
 fi
 
@@ -63,12 +61,22 @@ fi
 print_step "Validating configuration from $CONFIG_FILE..."
 validate_server_config
 
+print_step "Validating SSL/TLS configuration..."
+validate_ssl_config
+
 print_step "Validating SSH public key format..."
-if ! SSH_KEY_VALIDATION=$(validate_ssh_public_key "$SSH_PUBLIC_KEY"); then
+if ! SSH_KEY_VALIDATION=$(validate_ssh_public_key "$ROOT_USER_SSH_PUBLIC_KEY"); then
     print_error "$SSH_KEY_VALIDATION"
     exit 1
 fi
 print_message "SSH public key validation passed"
+
+print_step "Validating restricted user SSH public key format..."
+if ! RESTRICTED_USER_SSH_KEY_VALIDATION=$(validate_ssh_public_key "$RESTRICTED_USER_SSH_PUBLIC_KEY"); then
+    print_error "$RESTRICTED_USER_SSH_KEY_VALIDATION"
+    exit 1
+fi
+print_message "Restricted user SSH public key validation passed"
 
 # ── System resource detection ─────────────────────────────────────────────────
 
@@ -104,7 +112,8 @@ echo "System Resources:   ${TOTAL_RAM_GB}GB RAM, ${CPU_CORES} CPU cores"
 echo "PHP Version:        $PHP_VERSION"
 echo "OpenSearch Version: $OPENSEARCH_VERSION"
 echo "Composer Version:   $COMPOSER_VERSION"
-echo "Restricted User:    $RESTRICTED_USER"
+echo "Restricted User:    $RESTRICTED_USERNAME"
+echo "SSL Termination:    $ENABLE_SSL_TERMINATION"
 echo "phpMyAdmin Port:    $PMA_PORT"
 echo "phpMyAdmin Path:    (generated during phpMyAdmin module)"
 echo "============================================================================"
@@ -138,25 +147,3 @@ for module in "${_modules_to_run[@]}"; do
     print_step "━━━ Module: $(basename "$module") ━━━"
     source "$module"
 done
-
-# ── Magento deployment ────────────────────────────────────────────────────────
-
-if [[ "$SKIP_MAGENTO_DEPLOYMENT" == true ]]; then
-    echo ""
-    print_message "Skipping Magento deployment (--skip-magento-deployment passed)."
-    print_message "Run install-magento.sh manually when ready:"
-    print_message "  su - ${RESTRICTED_USER}"
-    print_message "  bash ${SCRIPT_DIR}/install-magento.sh"
-else
-    echo ""
-    print_step "━━━ Starting Magento deployment as ${RESTRICTED_USER} ━━━"
-    su - "${RESTRICTED_USER}" -c "bash '${SCRIPT_DIR}/install-magento.sh'"
-
-    echo ""
-    print_step "Activating Magento Nginx routing rules..."
-    sed -i "s|# include ${MAGENTO_DIR}/nginx.conf;|include ${MAGENTO_DIR}/nginx.conf;|" \
-        "/etc/nginx/sites-available/${DOMAIN_NAME}"
-    nginx -t
-    systemctl reload nginx
-    print_message "Nginx vhost updated and reloaded."
-fi

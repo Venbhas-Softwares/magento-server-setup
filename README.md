@@ -2,14 +2,17 @@
 
 ![Platform](https://img.shields.io/badge/platform-Ubuntu%2024.04%20LTS-E95420?logo=ubuntu&logoColor=white)
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25?logo=gnubash&logoColor=white)
-![PHP](https://img.shields.io/badge/PHP-8.1%20%7C%208.2%20%7C%208.3-777BB4?logo=php&logoColor=white)
+![PHP](https://img.shields.io/badge/PHP-8.1%20%7C%208.2%20%7C%208.3%20%7C%208.4-777BB4?logo=php&logoColor=white)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
-Automated shell scripts to provision a production-ready Magento 2 server from scratch on Ubuntu 24.04 LTS, then install Magento 2 as a second step.
+An automated shell script to provision a production-ready Magento 2 **server** from scratch on Ubuntu 24.04 LTS — Nginx, PHP-FPM, MariaDB, OpenSearch, Valkey, Varnish, Composer, phpMyAdmin, and security hardening.
+
+> [!NOTE]
+> This repo provisions the **server infrastructure only**. Deploying the Magento application itself (Composer install, `setup:install`, database import, admin account) is out of scope — bring your own deployment process and point it at the web root this script creates.
 
 > [!WARNING]
-> **Do not use these scripts for production deployments without thorough review and validation.**
-> The scripts are provided as a starting point and have not been independently audited for security or reliability. Before running on any production system you must review every module, verify all generated configurations against your organisation's standards, test on a staging environment, and confirm that security hardening meets your requirements. You assume full responsibility for any production use.
+> **Do not use this script for production deployments without thorough review and validation.**
+> The script is provided as a starting point and has not been independently audited for security or reliability. Before running on any production system you must review every module, verify all generated configurations against your organisation's standards, test on a staging environment, and confirm that security hardening meets your requirements. You assume full responsibility for any production use.
 
 ---
 
@@ -20,11 +23,11 @@ Automated shell scripts to provision a production-ready Magento 2 server from sc
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
 - [Configuration Reference](#configuration-reference)
-- [What Each Script Does](#what-each-script-does)
+- [What the Script Does](#what-the-script-does)
 - [Resource Sizing](#resource-sizing)
 - [Security Model](#security-model)
 - [Production Checklist](#production-checklist)
-- [Post-Installation](#post-installation)
+- [Deploying Your Application](#deploying-your-application)
 - [Logs](#logs)
 - [File Structure](#file-structure)
 - [Known Constraints](#known-constraints)
@@ -35,17 +38,16 @@ Automated shell scripts to provision a production-ready Magento 2 server from sc
 
 ## Overview
 
-The setup is split into two sequential scripts that share a single configuration file:
+`setup-ubuntu24.sh` is the single entry point. It validates a config file, detects hardware, then sources each numbered module in `server-setup/` in order.
 
 | Script | Run as | Purpose |
 |---|---|---|
 | `setup-ubuntu24.sh` | `root` | Provisions the full server stack |
-| `install-magento.sh` | Restricted user | Downloads and installs Magento 2 |
 
-Both scripts read from `magento-setup.conf`, which you create once before running either script.
+It reads from `server-setup.conf`, which you create once before running it.
 
 > [!IMPORTANT]
-> `magento-setup.conf` contains credentials and must **never** be committed to version control. Add it to `.gitignore` immediately after creating it.
+> `server-setup.conf` contains credentials and must **never** be committed to version control. It's already listed in `.gitignore`.
 
 ---
 
@@ -55,14 +57,14 @@ Both scripts read from `magento-setup.conf`, which you create once before runnin
 |---|---|
 | **Nginx** | Web server / reverse proxy (port 8080, behind Varnish) |
 | **Varnish Cache** | Full-page cache (port 80) |
-| **PHP-FPM** | Application runtime (8.1–8.3 configurable) |
+| **PHP-FPM** | Application runtime (8.1–8.4 configurable) |
 | **MariaDB** | Relational database |
 | **OpenSearch** | Search engine (replaces Elasticsearch in Magento 2.4+) |
 | **Valkey (Redis-compatible)** | Sessions, application cache, full-page cache (separate DBs) |
 | **Composer** | PHP dependency manager |
 | **phpMyAdmin** | Database GUI (secured on a non-standard port with random URL path) |
 | **UFW** | Host firewall |
-| **Let's Encrypt / Certbot** | TLS certificate (optional, installed by `install-magento.sh`) |
+| **Nginx SSL termination** | TLS on :443 → Varnish on :80 (self-signed origin cert by default; optional — skip if TLS is already terminated upstream) |
 
 ---
 
@@ -70,8 +72,8 @@ Both scripts read from `magento-setup.conf`, which you create once before runnin
 
 - Ubuntu 24.04 LTS (fresh install recommended)
 - Root SSH access with a public/private key pair
-- Domain name with DNS pointing to the server (required for SSL)
-- Magento Marketplace account with API keys ([marketplace.magento.com](https://marketplace.magento.com))
+- A public/private key pair for the restricted (application) user's SSH login
+- Domain name with DNS pointing to the server (required if using Nginx SSL termination — see below)
 
 **Recommended minimum hardware:** 4 GB RAM, 2 CPU cores. 8 GB+ RAM is recommended for production.
 
@@ -89,17 +91,11 @@ cd magento-server-setup
 ### 2. Create your configuration file
 
 ```bash
-cp magento-setup.conf.example magento-setup.conf
-nano magento-setup.conf
+cp server-setup.conf.example server-setup.conf
+nano server-setup.conf
 ```
 
 Fill in **all** values — see the [Configuration Reference](#configuration-reference) below.
-
-> [!IMPORTANT]
-> Add `magento-setup.conf` to your `.gitignore` before making any commits:
-> ```bash
-> echo "magento-setup.conf" >> .gitignore
-> ```
 
 ### 3. Run the server setup (as root)
 
@@ -107,103 +103,62 @@ Fill in **all** values — see the [Configuration Reference](#configuration-refe
 sudo bash setup-ubuntu24.sh
 ```
 
-This provisions the entire server stack. A timestamped log file is saved in the current directory.
+This provisions the entire server stack. A timestamped log file is saved in the current directory, and a summary is written to `server_setup_info.txt`.
 
-### 4. Run the Magento installer (as the restricted user)
+### Running individual modules
+
+Use `--modules` to (re)run specific modules instead of the full sequence — useful when iterating on one piece of the stack:
 
 ```bash
-ssh root@YOUR_SERVER_IP -i /path/to/your/private/key
-su - magento
-bash /path/to/install-magento.sh
+sudo bash setup-ubuntu24.sh --modules=03,05,09
+sudo bash setup-ubuntu24.sh --modules=03-php.sh
 ```
-
-This downloads Magento via Composer, installs it, configures Nginx, and optionally installs the SSL certificate.
 
 ---
 
 ## Configuration Reference
 
-Copy `magento-setup.conf.example` to `magento-setup.conf` and fill in all values. Both scripts read from this single file.
-
-<details>
-<summary><strong>Shared settings</strong></summary>
+Copy `server-setup.conf.example` to `server-setup.conf` and fill in all values.
 
 | Variable | Example | Description |
 |---|---|---|
-| `DOMAIN_NAME` | `example.com` | Your store's domain name |
-
-</details>
-
-<details>
-<summary><strong>Server setup — <code>setup-ubuntu24.sh</code></strong></summary>
-
-| Variable | Example | Description |
-|---|---|---|
-| `PHP_VERSION` | `8.3` | PHP version: `8.1`, `8.2`, or `8.3` |
-| `OPENSEARCH_VERSION` | `2.15` | OpenSearch version, e.g. `2.11`, `2.13`, `2.15` |
-| `COMPOSER_VERSION` | `2` | Composer major version: `1` or `2` |
+| `DOMAIN_NAME` | `example.com` | Domain name the server will host |
+| `PHP_VERSION` | `8.4` | PHP version: `8.1`, `8.2`, `8.3`, or `8.4` |
+| `OPENSEARCH_VERSION` | `3.5.0` | OpenSearch version, e.g. `2.15`, `3.5.0` |
+| `COMPOSER_VERSION` | `2` | Composer major version: `2` |
+| `MARIADB_VERSION` | `11.4` | MariaDB version, e.g. `10.11`, `11.4`, `11.8` |
 | `MARIADB_ROOT_PASSWORD` | — | Strong password for the MariaDB root user |
-| `RESTRICTED_USER` | `magento` | Linux username for the Magento application user |
-| `SSH_PUBLIC_KEY` | `ssh-ed25519 AAAA…` | Your full SSH public key (key-based auth only) |
+| `RESTRICTED_USERNAME` | `magento` | Linux username for the application user |
+| `ROOT_USER_SSH_PUBLIC_KEY` | `ssh-ed25519 AAAA…` | Your full SSH public key for root login (key-based auth only) |
+| `RESTRICTED_USER_SSH_PUBLIC_KEY` | `ssh-ed25519 AAAA…` | SSH public key for the restricted user's login (key-based auth only) |
 | `PMA_PORT` | `61098` | Non-standard port for phpMyAdmin (1–65535) |
 | `PMA_USERNAME` | `pma_admin` | phpMyAdmin login username |
 | `PMA_PASSWORD` | — | Strong password for phpMyAdmin |
-
-</details>
-
-<details>
-<summary><strong>Magento installation — <code>install-magento.sh</code></strong></summary>
-
-| Variable | Example | Description |
-|---|---|---|
-| `DB_NAME` | `magento2` | Database name to create |
-| `DB_USER` | `magento_user` | Database user |
-| `DB_PASSWORD` | — | Strong database password |
-| `DB_HOST` | `localhost` | Database host |
-| `ADMIN_FIRSTNAME` | `Admin` | Magento admin first name |
-| `ADMIN_LASTNAME` | `User` | Magento admin last name |
-| `ADMIN_EMAIL` | `admin@example.com` | Magento admin email |
-| `ADMIN_USERNAME` | `admin` | Magento admin username |
-| `ADMIN_PASSWORD` | `Admin123!` | Magento admin password (must meet complexity rules) |
-| `CURRENCY` | `USD` | Store default currency |
-| `TIMEZONE` | `America/Chicago` | Store timezone |
-| `LANGUAGE` | `en_US` | Store locale |
-| `MAGENTO_PUBLIC_KEY` | — | Public key from Magento Marketplace |
-| `MAGENTO_PRIVATE_KEY` | — | Private key from Magento Marketplace |
-| `INSTALL_SSL` | `y` | Install Let's Encrypt SSL: `y` or `n` |
-| `SSL_EMAIL` | `ssl@example.com` | Email for SSL certificate notifications (required if `INSTALL_SSL=y`) |
-
-</details>
+| `ENABLE_SSL_TERMINATION` | `yes` | `yes`/`no` — whether module 11 sets up Nginx TLS termination on :443. Set `no` if TLS is already terminated upstream (Cloudflare Flexible mode, an external load balancer, another CDN) |
+| `SSL_CERT_PATH` | *(optional)* | Absolute path to a certificate to use instead of the auto-generated self-signed one. Must be set together with `SSL_KEY_PATH`, or left blank |
+| `SSL_KEY_PATH` | *(optional)* | Absolute path to the matching private key. Must be set together with `SSL_CERT_PATH`, or left blank |
 
 <details>
 <summary><strong>Generated values (auto-populated — do not edit)</strong></summary>
 
-The scripts append these to `magento-setup.conf` automatically after running:
+The script appends these to `server-setup.conf` automatically after running:
 
-| Variable | Set by | Description |
-|---|---|---|
-| `PMA_PATH` | `setup-ubuntu24.sh` | Randomly generated phpMyAdmin URL path |
-| `MAGENTO_DIR` | `setup-ubuntu24.sh` | Magento installation path (`/var/www/<DOMAIN_NAME>`) |
-| `MAGENTO_INSTALLED` | `install-magento.sh` | Installation status flag |
-| `MAGENTO_BASE_URL` | `install-magento.sh` | Store base URL |
-| `MAGENTO_ADMIN_URL` | `install-magento.sh` | Admin panel URL |
+| Variable | Description |
+|---|---|
+| `PMA_PATH` | Randomly generated phpMyAdmin URL path |
+| `MAGENTO_DIR` | Web root path (`/var/www/<DOMAIN_NAME>`) |
 
 </details>
 
 ---
 
-## What Each Script Does
+## What the Script Does
 
-### `setup-ubuntu24.sh` — Server provisioning
-
-The main script validates the configuration and detected hardware, then sources each numbered module in `server-setup/` in order:
-
-<details>
-<summary><strong>View all modules</strong></summary>
+`setup-ubuntu24.sh` validates the configuration and detected hardware, then sources each numbered module in `server-setup/` in order:
 
 | Module | What it does |
 |---|---|
-| `01-system.sh` | System update, essential packages, restricted user, Magento web root |
+| `01-system.sh` | System update, essential packages, restricted user, web root |
 | `02-nginx.sh` | Nginx installation and base configuration |
 | `03-php.sh` | PHP-FPM installation, `php.ini`, and pool configuration |
 | `04-mariadb.sh` | MariaDB installation, hardening, and Magento-optimised `my.cnf` |
@@ -212,29 +167,10 @@ The main script validates the configuration and detected hardware, then sources 
 | `07-varnish.sh` | Varnish Cache installation, VCL configuration, and systemd unit |
 | `08-composer.sh` | Composer installation |
 | `09-phpmyadmin.sh` | phpMyAdmin secured with HTTP Basic Auth, random port, and random URL path |
-| `10-security.sh` | UFW firewall rules, SSH hardening (key-only, password auth disabled) |
-| `11-finalize.sh` | Nginx test and restart, config persistence, info file at `./server_setup_info.txt` (same directory as the script) |
-
-</details>
-
-### `install-magento.sh` — Magento installation
-
-1. Validates the user is **not** root
-2. Detects the installed PHP version
-3. Validates all required config values
-4. Configures Composer authentication against `repo.magento.com`
-5. Downloads Magento 2 Community Edition via Composer (skipped if already present)
-6. Creates the database
-7. Sets directory permissions
-8. Runs `php bin/magento setup:install` with:
-   - OpenSearch as the search engine
-   - Valkey for sessions (DB 0), application cache (DB 1), and full-page cache (DB 2)
-9. Sets Magento to production mode
-10. Generates and installs the Nginx virtual host configuration
-11. Optionally installs a Let's Encrypt SSL certificate via Certbot
-12. Sets up three Magento cron jobs
-13. Runs final reindex and cache flush
-14. Saves an info file to `~/magento_install_info_<domain>.txt`
+| `10-security.sh` | UFW firewall rules, SSH hardening (key-only, password auth disabled), Git deploy key for the restricted user |
+| `11-ssl-termination.sh` | Nginx SSL termination on :443 (self-signed or operator-supplied cert, proxies to Varnish) — optional, skipped when `ENABLE_SSL_TERMINATION=no` |
+| `12-vhost.sh` | Placeholder Nginx virtual host for the web root |
+| `13-finalize.sh` | Nginx test/restart, config persistence, `server_setup_info.txt` summary |
 
 ---
 
@@ -258,74 +194,46 @@ Service allocations are calculated dynamically from detected hardware at runtime
 
 ## Security Model
 
-- **SSH**: Password authentication is disabled. Only key-based login is permitted. The key from `SSH_PUBLIC_KEY` is deployed to `root`'s `authorized_keys`.
-- **Restricted user**: The Magento application user has no `sudo` rights and no direct SSH access. It is reachable only via `su - <RESTRICTED_USER>` from a root session.
+- **SSH**: Password authentication is disabled. Only key-based login is permitted. The key from `ROOT_USER_SSH_PUBLIC_KEY` is deployed to `root`'s `authorized_keys`.
+- **Restricted user**: The application user has no `sudo` rights but does have direct, key-based SSH login (the key from `RESTRICTED_USER_SSH_PUBLIC_KEY` is deployed to its `authorized_keys`) — a full but unprivileged shell. It's also reachable via `su - <RESTRICTED_USERNAME>` from a root session. A separate Git deploy key is generated for it so you can pull a private repo when deploying manually.
 - **phpMyAdmin**: Served on a non-standard port behind HTTP Basic Authentication with a randomly generated URL path.
 - **Service binding**: MariaDB, OpenSearch, and Valkey all bind to `127.0.0.1` only.
-- **Varnish/Nginx**: Varnish owns port 80; Nginx listens on port 8080 and is not directly exposed.
-- **Firewall (UFW)**: Only ports 80, 443, and the phpMyAdmin port are open externally.
+- **Varnish/Nginx**: Varnish owns port 80; Nginx listens on port 8080 and is not directly exposed. Varnish forwards the real client IP via `X-Forwarded-For` through to PHP-FPM, so Magento's maintenance-mode IP allowlist and request logs see the actual visitor IP rather than Varnish's own address.
+- **Firewall (UFW)**: Only port 80, the phpMyAdmin port, and — when `ENABLE_SSL_TERMINATION=yes` — port 443 are open externally.
 - **Nginx headers**: `X-Frame-Options`, `X-XSS-Protection`, `X-Content-Type-Options`, `Referrer-Policy` are set on all responses.
-- **Config file loader**: `lib/functions.sh` uses a strict allowlist-based parser that rejects unknown variables and blocks shell injection patterns in `magento-setup.conf`.
+- **Config file loader**: `lib/functions.sh` uses a strict allowlist-based parser that rejects unknown variables and blocks shell injection patterns in `server-setup.conf`.
 
 ---
 
 ## Production Checklist
 
 > [!WARNING]
-> These scripts must not be treated as production-ready without completing the validations below.
+> This script must not be treated as production-ready without completing the validations below.
 
 <details>
 <summary><strong>Expand checklist</strong></summary>
 
 - [ ] Review every generated configuration file (Nginx, PHP-FPM, MariaDB, OpenSearch, Varnish) against your organisation's hardening standards
 - [ ] Test the full setup end-to-end on a staging environment before deploying to production
-- [ ] Replace the default Varnish VCL with one exported from your Magento admin panel (**Stores → Configuration → Advanced → System → Full Page Cache**)
-- [ ] Change the Magento admin URL from the default `/admin` to a custom path
-- [ ] Enable Magento Two-Factor Authentication (2FA) for all admin accounts
 - [ ] Confirm firewall rules allow only the ports your environment requires
 - [ ] Implement automated database and file backups with off-site storage
 - [ ] Set up centralised log monitoring and alerting
-- [ ] Establish a patch management process for OS, PHP, MariaDB, and Magento
-- [ ] Perform a security scan (e.g. Magento Security Scan Tool) before going live
+- [ ] Establish a patch management process for OS, PHP, and MariaDB
 - [ ] Validate SSL/TLS configuration with an external tool (e.g. SSL Labs)
-- [ ] Confirm `magento-setup.conf` is not committed to version control and has restricted file permissions (`chmod 600 magento-setup.conf`)
+- [ ] Confirm `server-setup.conf` is not committed to version control and has restricted file permissions (`chmod 600 server-setup.conf`)
 
 </details>
 
 ---
 
-## Post-Installation
+## Deploying Your Application
 
-### Common Magento commands
+This repo stops at server provisioning. Once it finishes:
 
-Run these from the Magento root directory (`/var/www/<domain>`):
-
-```bash
-php bin/magento cache:flush
-php bin/magento indexer:reindex
-php bin/magento setup:static-content:deploy -f
-php bin/magento setup:di:compile
-php bin/magento maintenance:enable
-php bin/magento maintenance:disable
-php bin/magento setup:upgrade
-php bin/magento module:status
-```
-
-### Service management
-
-```bash
-sudo systemctl restart php8.3-fpm
-sudo systemctl restart nginx
-sudo systemctl restart varnish
-sudo systemctl restart valkey-server
-sudo systemctl status opensearch
-```
-
-### Monitor Varnish cache
-
-```bash
-varnishstat
-```
+1. `su - <RESTRICTED_USERNAME>` and deploy Magento into `${MAGENTO_DIR}` (`/var/www/<DOMAIN_NAME>`) however you normally do — Composer install, `bin/magento setup:install`, database import, etc. The restricted user's public Git deploy key (printed at the end of the run, and saved in `server_setup_info.txt`) can be added to your repository host for a private `git clone`.
+2. Add `include ${MAGENTO_DIR}/nginx.conf;` to the server block in `/etc/nginx/sites-available/<DOMAIN_NAME>` once Magento's `nginx.conf` exists, then `nginx -t && systemctl reload nginx`.
+3. Configure Varnish as the caching backend in the Magento admin, export its VCL, and review it against `/etc/varnish/default.vcl`.
+4. If using the auto-generated self-signed certificate, replace it at `/etc/nginx/ssl/` with a real one (e.g. a Cloudflare Origin Certificate or Let's Encrypt) for production use — or set `SSL_CERT_PATH`/`SSL_KEY_PATH` in the config and re-run `sudo bash setup-ubuntu24.sh --modules=11`.
 
 ---
 
@@ -334,8 +242,6 @@ varnishstat
 | Log | Location |
 |---|---|
 | Server setup | `./setup-server-<timestamp>.log` |
-| Magento install | `./install-magento-<timestamp>.log` |
-| Magento application | `/var/www/<domain>/var/log/` |
 | Nginx | `/var/log/nginx/` |
 | PHP-FPM | `/var/log/php<version>-fpm.log` |
 
@@ -346,9 +252,8 @@ varnishstat
 ```
 magento-server-setup/
 ├── setup-ubuntu24.sh           # Main server provisioning script (run as root)
-├── install-magento.sh          # Magento application installer (run as restricted user)
-├── magento-setup.conf.example  # Configuration template
-├── magento-setup.conf          # Your configuration — NOT committed (add to .gitignore)
+├── server-setup.conf.example  # Configuration template
+├── server-setup.conf          # Your configuration — NOT committed (gitignored)
 ├── lib/
 │   └── functions.sh            # Shared helpers: output, config loader, validators
 └── server-setup/
@@ -361,8 +266,10 @@ magento-server-setup/
     ├── 07-varnish.sh           # Varnish Cache
     ├── 08-composer.sh          # Composer
     ├── 09-phpmyadmin.sh        # phpMyAdmin
-    ├── 10-security.sh          # UFW firewall + SSH hardening
-    └── 11-finalize.sh          # Final checks, info file, summary
+    ├── 10-security.sh          # UFW firewall + SSH hardening + deploy key
+    ├── 11-ssl-termination.sh   # Nginx SSL termination
+    ├── 12-vhost.sh             # Placeholder Nginx virtual host
+    └── 13-finalize.sh          # Final checks, info file, summary
 ```
 
 ---
@@ -373,6 +280,7 @@ magento-server-setup/
 - **Single-node OpenSearch** — configured as `discovery.type: single-node`; not suitable for clustering.
 - **Local services only** — all backend services bind to `127.0.0.1`; modify the relevant module if a distributed setup is needed.
 - **No automated backups** — implement an external backup strategy before going to production.
+- **No application deployment** — Magento installation/deployment is intentionally out of scope; bring your own process.
 
 ---
 

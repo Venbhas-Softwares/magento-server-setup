@@ -1,0 +1,46 @@
+# server-setup.conf.example
+# Copy to server-setup.conf and fill in your values before running setup-ubuntu24.sh.
+
+# ============================================================
+# SERVER SETUP (setup-ubuntu24.sh)
+# All values are REQUIRED
+# ============================================================
+DOMAIN_NAME="example.com"
+PHP_VERSION="8.4"                         # Required: 8.1, 8.2, 8.3, or 8.4
+OPENSEARCH_VERSION="3.5.0"               # Required: e.g., 2.11, 2.15, 3.5.0
+COMPOSER_VERSION="2"                     # Required: 2
+MARIADB_VERSION="11.4"                   # Required: e.g., 10.11, 11.4, 11.8
+MARIADB_ROOT_PASSWORD="change-me-strong-password"  # Required: strong root password
+RESTRICTED_USERNAME="magento"               # Required: Linux username for the application user
+ROOT_USER_SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"    # Required: full SSH public key for root login
+RESTRICTED_USER_SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"  # Required: full SSH public key for restricted user login
+PMA_PORT="61098"                         # Required: phpMyAdmin port (1–65535)
+PMA_USERNAME="dbadmin"                  # Required: phpMyAdmin username
+PMA_PASSWORD="change-me-strong-password"  # Required: phpMyAdmin password
+
+# ============================================================
+# SSL / TLS (optional — see server-setup/11-ssl-termination.sh)
+# ============================================================
+# ENABLE_SSL_TERMINATION: "yes" or "no".
+# - "yes" (default): Nginx terminates TLS on :443 and proxies to Varnish on :80.
+#   Suitable when this server itself needs to present a certificate — e.g.
+#   Cloudflare "Full" mode, or any setup where TLS should end here.
+# - "no": skip SSL termination entirely. Varnish becomes the sole HTTP-facing
+#   service on :80. Use this when TLS is already terminated upstream of this
+#   server (Cloudflare "Flexible" mode, an external load balancer, another CDN).
+ENABLE_SSL_TERMINATION="yes"
+
+# Optional: supply your own certificate/key instead of the auto-generated
+# self-signed one (e.g. a Cloudflare Origin Certificate for Full (Strict), or
+# a certificate from any other provider). Must both be set together, or both
+# left blank to fall back to a self-signed certificate. Absolute paths only.
+# Ignored when ENABLE_SSL_TERMINATION="no".
+# SSL_CERT_PATH="/root/certs/origin.pem"
+# SSL_KEY_PATH="/root/certs/origin.key"
+
+# ============================================================
+# GENERATED VALUES — populated automatically by setup-ubuntu24.sh
+# Do NOT edit these manually
+# ============================================================
+# PMA_PATH="a1b2c3..."       # randomly-generated phpMyAdmin URL path
+# MAGENTO_DIR="/var/www/example.com"

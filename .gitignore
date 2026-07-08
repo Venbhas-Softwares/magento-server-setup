@@ -3,11 +3,10 @@
 # ============================================================
 
 # User configuration — contains passwords and API keys
-magento-setup.conf
+server-setup.conf
 
-# Server and Magento info files generated at runtime (contain credentials)
+# Server info file generated at runtime (contains credentials)
 server_setup_info.txt
-magento_install_info_*.txt
 
 
 # ============================================================
@@ -15,7 +14,6 @@ magento_install_info_*.txt
 # ============================================================
 
 setup-server-*.log
-install-magento-*.log
 
 
 # ============================================================

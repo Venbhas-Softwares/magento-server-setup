@@ -41,12 +41,10 @@ load_config_safely() {
     local line_number=0
     local allowed_vars=(
         "DOMAIN_NAME" "PHP_VERSION" "OPENSEARCH_VERSION" "COMPOSER_VERSION"
-        "MARIADB_VERSION" "MARIADB_ROOT_PASSWORD" "RESTRICTED_USER" "SSH_PUBLIC_KEY"
+        "MARIADB_VERSION" "MARIADB_ROOT_PASSWORD" "RESTRICTED_USERNAME" "ROOT_USER_SSH_PUBLIC_KEY"
+        "RESTRICTED_USER_SSH_PUBLIC_KEY"
         "PMA_USERNAME" "PMA_PASSWORD" "PMA_PORT" "PMA_PATH"
-        "DB_NAME" "DB_USER" "DB_PASSWORD" "DB_HOST"
-        "GIT_REPO_URL" "DB_DUMP_PATH" "MEDIA_PATH"
-        "ADMIN_FRONTNAME"
-        "MAGENTO_DIR" "MAGENTO_DEPLOYED" "MAGENTO_DEPLOY_DATE"
+        "MAGENTO_DIR" "ENABLE_SSL_TERMINATION" "SSL_CERT_PATH" "SSL_KEY_PATH"
     )
 
     while IFS= read -r line; do
@@ -98,8 +96,9 @@ validate_server_config() {
     [[ -z "$COMPOSER_VERSION" ]]      && missing+=("COMPOSER_VERSION")
     [[ -z "$MARIADB_VERSION" ]]       && missing+=("MARIADB_VERSION")
     [[ -z "$MARIADB_ROOT_PASSWORD" ]] && missing+=("MARIADB_ROOT_PASSWORD")
-    [[ -z "$RESTRICTED_USER" ]]       && missing+=("RESTRICTED_USER")
-    [[ -z "$SSH_PUBLIC_KEY" ]]        && missing+=("SSH_PUBLIC_KEY")
+    [[ -z "$RESTRICTED_USERNAME" ]]       && missing+=("RESTRICTED_USERNAME")
+    [[ -z "$ROOT_USER_SSH_PUBLIC_KEY" ]]        && missing+=("ROOT_USER_SSH_PUBLIC_KEY")
+    [[ -z "$RESTRICTED_USER_SSH_PUBLIC_KEY" ]] && missing+=("RESTRICTED_USER_SSH_PUBLIC_KEY")
     [[ -z "$PMA_PORT" ]]              && missing+=("PMA_PORT")
     [[ -z "$PMA_USERNAME" ]]          && missing+=("PMA_USERNAME")
     [[ -z "$PMA_PASSWORD" ]]          && missing+=("PMA_PASSWORD")
@@ -122,12 +121,60 @@ validate_server_config() {
     fi
 }
 
+validate_ssl_config() {
+    ENABLE_SSL_TERMINATION="${ENABLE_SSL_TERMINATION:-yes}"
+
+    if [[ "$ENABLE_SSL_TERMINATION" != "yes" && "$ENABLE_SSL_TERMINATION" != "no" ]]; then
+        print_error "Invalid ENABLE_SSL_TERMINATION '${ENABLE_SSL_TERMINATION}'. Must be 'yes' or 'no'"
+        exit 1
+    fi
+
+    if [[ "$ENABLE_SSL_TERMINATION" == "no" ]]; then
+        if [[ -n "$SSL_CERT_PATH" || -n "$SSL_KEY_PATH" ]]; then
+            print_warning "SSL_CERT_PATH/SSL_KEY_PATH are set but ENABLE_SSL_TERMINATION=no — they will be ignored"
+        fi
+        return 0
+    fi
+
+    if [[ -z "$SSL_CERT_PATH" && -z "$SSL_KEY_PATH" ]]; then
+        print_message "ENABLE_SSL_TERMINATION=yes with no custom cert — a self-signed certificate will be generated"
+        return 0
+    fi
+
+    if [[ -z "$SSL_CERT_PATH" || -z "$SSL_KEY_PATH" ]]; then
+        print_error "SSL_CERT_PATH and SSL_KEY_PATH must both be set together (only one was provided)"
+        exit 1
+    fi
+    if [[ ! -f "$SSL_CERT_PATH" ]]; then
+        print_error "SSL_CERT_PATH does not exist: $SSL_CERT_PATH"
+        exit 1
+    fi
+    if [[ ! -f "$SSL_KEY_PATH" ]]; then
+        print_error "SSL_KEY_PATH does not exist: $SSL_KEY_PATH"
+        exit 1
+    fi
+    if ! openssl x509 -in "$SSL_CERT_PATH" -noout -checkend 0 >/dev/null 2>&1; then
+        print_error "SSL_CERT_PATH is not a valid certificate or has expired: $SSL_CERT_PATH"
+        exit 1
+    fi
+
+    local cert_pubkey key_pubkey
+    cert_pubkey=$(openssl x509 -in "$SSL_CERT_PATH" -noout -pubkey 2>/dev/null)
+    key_pubkey=$(openssl pkey -in "$SSL_KEY_PATH" -pubout 2>/dev/null)
+    if [[ -z "$cert_pubkey" || -z "$key_pubkey" || "$cert_pubkey" != "$key_pubkey" ]]; then
+        print_error "SSL_CERT_PATH and SSL_KEY_PATH do not match (certificate/key mismatch)"
+        exit 1
+    fi
+
+    print_message "Custom SSL certificate validated: $SSL_CERT_PATH"
+}
+
 validate_ssh_public_key() {
     local key="$1"
-    [[ -z "$key" ]] && echo "ERROR: SSH_PUBLIC_KEY is empty" && return 1
+    [[ -z "$key" ]] && echo "ERROR: ROOT_USER_SSH_PUBLIC_KEY is empty" && return 1
     key=$(echo "$key" | xargs)
     if ! [[ "$key" =~ ^(ssh-rsa|ssh-dss|ecdsa-sha2-nistp|ssh-ed25519)[[:space:]]+[A-Za-z0-9+/=]+([[:space:]]+.*)?$ ]]; then
-        echo "ERROR: SSH_PUBLIC_KEY has invalid format"
+        echo "ERROR: ROOT_USER_SSH_PUBLIC_KEY has invalid format"
         return 1
     fi
     local key_type key_data
@@ -159,33 +206,6 @@ validate_ssh_public_key() {
     fi
     echo "OK"
     return 0
-}
-
-validate_magento_install_config() {
-    local missing=()
-    [[ -z "${DOMAIN_NAME:-}" ]]           && missing+=("DOMAIN_NAME")
-    [[ -z "${RESTRICTED_USER:-}" ]]       && missing+=("RESTRICTED_USER")
-    [[ -z "${MARIADB_ROOT_PASSWORD:-}" ]] && missing+=("MARIADB_ROOT_PASSWORD")
-    [[ -z "${GIT_REPO_URL:-}" ]]          && missing+=("GIT_REPO_URL")
-    [[ -z "${DB_NAME:-}" ]]               && missing+=("DB_NAME")
-    [[ -z "${DB_USER:-}" ]]               && missing+=("DB_USER")
-    [[ -z "${DB_PASSWORD:-}" ]]           && missing+=("DB_PASSWORD")
-    [[ -z "${DB_HOST:-}" ]]               && missing+=("DB_HOST")
-    [[ -z "${ADMIN_FRONTNAME:-}" ]]       && missing+=("ADMIN_FRONTNAME")
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        echo "ERROR: Missing required config variables in magento-setup.conf:"
-        for var in "${missing[@]}"; do echo "  - $var"; done
-        exit 1
-    fi
-
-    # Warn about optional values
-    if [[ -z "${DB_DUMP_PATH:-}" ]]; then
-        print_warning "DB_DUMP_PATH is not set. Database import will be skipped."
-    fi
-    if [[ -z "${MEDIA_PATH:-}" ]]; then
-        print_warning "MEDIA_PATH is not set. Media import will be skipped."
-    fi
 }
 
 validate_system_resources() {

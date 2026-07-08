@@ -1,31 +1,52 @@
 # Module 11 — Nginx SSL termination (HTTPS :443 → Varnish :80)
 #
+# Optional module, controlled by ENABLE_SSL_TERMINATION in server-setup.conf.
+# Skip it entirely when TLS is already terminated upstream of this server
+# (Cloudflare "Flexible" mode, an external load balancer, another CDN) — in
+# that case Varnish stays the sole HTTP-facing service on port 80.
+#
+# When enabled, this module either installs an operator-supplied certificate
+# (SSL_CERT_PATH / SSL_KEY_PATH) or generates a self-signed one suitable for
+# Cloudflare "Full" mode — Cloudflare does not validate the origin certificate
+# in Full mode. For Full (Strict) or any provider that does validate the
+# origin cert, set SSL_CERT_PATH/SSL_KEY_PATH to a real certificate (e.g. a
+# Cloudflare Origin Certificate: Cloudflare Dashboard → SSL/TLS → Origin
+# Server → Create Certificate).
+#
 # Adds an Nginx server block on port 443 that terminates TLS and proxies to
 # Varnish on port 80. Also ensures PHP-FPM receives the X-Forwarded-Proto
 # header so Magento can detect HTTPS via web/secure/offloader_header.
 #
-# Traffic flow after this module:
-#   Cloudflare HTTPS → Nginx :443 (TLS) → Varnish :80 → Nginx :8080 → PHP-FPM
+# Traffic flow when enabled:
+#   Edge/CDN HTTPS → Nginx :443 (TLS) → Varnish :80 → Nginx :8080 → PHP-FPM
 #
-# Uses: DOMAIN_NAME
+# Uses: DOMAIN_NAME, ENABLE_SSL_TERMINATION, SSL_CERT_PATH, SSL_KEY_PATH
 
-# ── Self-signed certificate ───────────────────────────────────────────────────
-# Sufficient for Cloudflare Full mode — Cloudflare does not validate the origin
-# certificate in Full mode. For Full (Strict), replace the cert and key with a
-# Cloudflare Origin Certificate:
-#   Cloudflare Dashboard → SSL/TLS → Origin Server → Create Certificate
+if [[ "$ENABLE_SSL_TERMINATION" != "yes" ]]; then
+    print_message "ENABLE_SSL_TERMINATION=no — skipping Nginx SSL termination. Varnish remains the sole HTTP-facing service on port 80."
+    return 0
+fi
 
-print_step "Generating self-signed SSL certificate for Cloudflare Full mode..."
+# ── Certificate: operator-supplied or self-signed ─────────────────────────────
+
 mkdir -p /etc/nginx/ssl
 
-openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-    -keyout /etc/nginx/ssl/cloudflare.key \
-    -out    /etc/nginx/ssl/cloudflare.crt \
-    -subj   "/CN=${DOMAIN_NAME}/O=Magento/C=US"
+if [[ -n "$SSL_CERT_PATH" && -n "$SSL_KEY_PATH" ]]; then
+    print_step "Installing operator-supplied SSL certificate..."
+    cp "$SSL_CERT_PATH" /etc/nginx/ssl/cloudflare.crt
+    cp "$SSL_KEY_PATH"  /etc/nginx/ssl/cloudflare.key
+    print_message "Certificate installed from: $SSL_CERT_PATH"
+else
+    print_step "Generating self-signed SSL certificate for Cloudflare Full mode..."
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout /etc/nginx/ssl/cloudflare.key \
+        -out    /etc/nginx/ssl/cloudflare.crt \
+        -subj   "/CN=${DOMAIN_NAME}/O=Magento/C=US"
+    print_message "Certificate: /etc/nginx/ssl/cloudflare.crt (valid 10 years)"
+fi
 
 chmod 600 /etc/nginx/ssl/cloudflare.key
 chmod 644 /etc/nginx/ssl/cloudflare.crt
-print_message "Certificate: /etc/nginx/ssl/cloudflare.crt (valid 10 years)"
 
 # ── Nginx SSL terminator vhost ────────────────────────────────────────────────
 # Proxies all HTTPS traffic to Varnish on localhost:80.
@@ -77,5 +98,8 @@ nginx -t
 systemctl reload nginx
 
 print_message "SSL terminator active: HTTPS :443 → Varnish :80 → Nginx :8080"
-print_warning "For Cloudflare Full (Strict): replace /etc/nginx/ssl/cloudflare.crt"
-print_warning "and cloudflare.key with a Cloudflare Origin Certificate."
+if [[ -z "$SSL_CERT_PATH" ]]; then
+    print_warning "Using a self-signed certificate — valid for Cloudflare Full mode only."
+    print_warning "For Full (Strict) or another provider that validates the origin cert,"
+    print_warning "set SSL_CERT_PATH/SSL_KEY_PATH in the config and re-run: --modules=11"
+fi
