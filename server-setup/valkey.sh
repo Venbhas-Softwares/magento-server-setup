@@ -1,6 +1,12 @@
-# Module 06 — Valkey installation and configuration
-# Uses: TOTAL_RAM_GB (set by main script)
+# Module valkey — Valkey installation and configuration
+# Uses: VALKEY_ENABLED, TOTAL_RAM_GB (set by main script)
 # Sets: VALKEY_MEMORY
+
+if [[ "${VALKEY_ENABLED:-yes}" != "yes" ]]; then
+    print_message "VALKEY_ENABLED=no — skipping Valkey installation"
+    VALKEY_MEMORY=0
+    return 0
+fi
 
 # ── Valkey memory allocation ──────────────────────────────────────────────────
 # 10% of RAM, capped at 2GB, minimum 256MB.

@@ -1,33 +1,69 @@
 # server-setup.conf.example
 # Copy to server-setup.conf and fill in your values before running setup-ubuntu24.sh.
+#
+# This provisions a general-purpose PHP application server (Nginx, PHP-FPM, a
+# database, and a set of optional services). It works for Magento, WordPress,
+# Drupal, or any other PHP application — the web root it creates is populated
+# by whatever deployment process you use separately.
 
 # ============================================================
 # SERVER SETUP (setup-ubuntu24.sh)
-# All values are REQUIRED
+# All values are REQUIRED unless the component they belong to is disabled
 # ============================================================
 DOMAIN_NAME="example.com"
-PHP_VERSION="8.4"                         # Required: 8.1, 8.2, 8.3, or 8.4
-OPENSEARCH_VERSION="3.5.0"               # Required: e.g., 2.11, 2.15, 3.5.0
-COMPOSER_VERSION="2"                     # Required: 2
-MARIADB_VERSION="11.4"                   # Required: e.g., 10.11, 11.4, 11.8
-MARIADB_ROOT_PASSWORD="change-me-strong-password"  # Required: strong root password
-RESTRICTED_USERNAME="magento"               # Required: Linux username for the application user
+PHP_VERSION="8.4"                         # Required: 7.0-7.4 or 8.0-8.5
+
+# ── Database (MariaDB or MySQL) ───────────────────────────────────────────
+# Set DB_ENABLED="no" to skip installing a database entirely (e.g. a static
+# site or an app that talks to an external/managed database).
+DB_ENABLED="yes"
+DB_ENGINE="mariadb"                      # Required if DB_ENABLED=yes: "mariadb" or "mysql"
+# MariaDB versions: 10.6+ or 11.x (e.g. 10.11, 11.4, 11.8)
+# MySQL versions:   5.6, 5.7, 8.0, or 8.4 — 8.0/8.4 install via apt. 5.6/5.7
+#                   are EOL and no longer in Oracle's apt repo for Ubuntu
+#                   24.04, so those two install differently: the database
+#                   module runs the official mysql:5.6/5.7 Docker image
+#                   instead (installing Docker itself if needed). Use 8.0 or
+#                   8.4 unless you have a specific legacy reason to pick an
+#                   older series.
+DB_VERSION="11.4"
+DB_ROOT_PASSWORD="change-me-strong-password"  # Required if DB_ENABLED=yes
+
+# ── Optional services — each can be switched off independently ───────────
+OPENSEARCH_ENABLED="yes"                 # "yes" or "no"
+OPENSEARCH_VERSION="3.5.0"               # Required if OPENSEARCH_ENABLED=yes, e.g. 2.11, 2.15, 3.5.0
+VALKEY_ENABLED="yes"                     # "yes" or "no" — Redis-compatible cache/session store
+VARNISH_ENABLED="yes"                    # "yes" or "no" — full-page HTTP cache in front of Nginx.
+                                          # When "no", Nginx becomes the sole HTTP-facing service on :80.
+VARNISH_VERSION="7.5"                    # Required if VARNISH_ENABLED=yes: 6.0, 7.0, 7.4, or 7.5 —
+                                          # installed from Varnish's own official packagecloud.io repo.
+                                          # Not every series is guaranteed to have Ubuntu 24.04 packages
+                                          # published at all times; apt will error clearly if so. 7.5 is
+                                          # the current series and the safest default; 6.0 is the LTS branch.
+COMPOSER_ENABLED="yes"                   # "yes" or "no"
+COMPOSER_VERSION="2"                     # Required if COMPOSER_ENABLED=yes: "1" or "2"
+PHPMYADMIN_ENABLED="yes"                 # "yes" or "no" — requires DB_ENABLED=yes
+
+RESTRICTED_USERNAME="webuser"                # Required: Linux username for the application user
 ROOT_USER_SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"    # Required: full SSH public key for root login
 RESTRICTED_USER_SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"  # Required: full SSH public key for restricted user login
-PMA_PORT="61098"                         # Required: phpMyAdmin port (1–65535)
-PMA_USERNAME="dbadmin"                  # Required: phpMyAdmin username
-PMA_PASSWORD="change-me-strong-password"  # Required: phpMyAdmin password
+
+# ── phpMyAdmin — required only if PHPMYADMIN_ENABLED=yes ─────────────────
+PMA_PORT="61098"                         # phpMyAdmin port (1–65535)
+PMA_USERNAME="dbadmin"                  # phpMyAdmin username
+PMA_PASSWORD="change-me-strong-password"  # phpMyAdmin password
 
 # ============================================================
-# SSL / TLS (optional — see server-setup/11-ssl-termination.sh)
+# SSL / TLS (optional — see server-setup/ssl-termination.sh)
 # ============================================================
 # ENABLE_SSL_TERMINATION: "yes" or "no".
-# - "yes" (default): Nginx terminates TLS on :443 and proxies to Varnish on :80.
+# - "yes" (default): Nginx terminates TLS on :443 and proxies to port 80 —
+#   Varnish if VARNISH_ENABLED=yes, otherwise the application vhost directly.
 #   Suitable when this server itself needs to present a certificate — e.g.
 #   Cloudflare "Full" mode, or any setup where TLS should end here.
-# - "no": skip SSL termination entirely. Varnish becomes the sole HTTP-facing
-#   service on :80. Use this when TLS is already terminated upstream of this
-#   server (Cloudflare "Flexible" mode, an external load balancer, another CDN).
+# - "no": skip SSL termination entirely. Port 80 becomes the sole HTTP-facing
+#   port. Use this when TLS is already terminated upstream of this server
+#   (Cloudflare "Flexible" mode, an external load balancer, another CDN).
 ENABLE_SSL_TERMINATION="yes"
 
 # Optional: supply your own certificate/key instead of the auto-generated
@@ -43,4 +79,4 @@ ENABLE_SSL_TERMINATION="yes"
 # Do NOT edit these manually
 # ============================================================
 # PMA_PATH="a1b2c3..."       # randomly-generated phpMyAdmin URL path
-# MAGENTO_DIR="/var/www/example.com"
+# WEB_ROOT="/var/www/example.com"

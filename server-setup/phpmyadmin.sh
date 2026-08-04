@@ -1,6 +1,11 @@
-# Module 09 — phpMyAdmin tarball installation and Nginx configuration
-# Uses: PMA_PORT, PMA_USERNAME, PMA_PASSWORD, PHP_VERSION, MARIADB_ROOT_PASSWORD
-# Sets: PMA_PATH, PMA_INSTALL_DIR (both used by module 11-finalize)
+# Module phpmyadmin — phpMyAdmin tarball installation and Nginx configuration
+# Uses: PHPMYADMIN_ENABLED, PMA_PORT, PMA_USERNAME, PMA_PASSWORD, PHP_VERSION, DB_CLI, DB_ROOT_PASSWORD
+# Sets: PMA_PATH, PMA_INSTALL_DIR (both used by module finalize)
+
+if [[ "${PHPMYADMIN_ENABLED:-yes}" != "yes" ]]; then
+    print_message "PHPMYADMIN_ENABLED=no — skipping phpMyAdmin installation"
+    return 0
+fi
 
 # ── Random URL path ───────────────────────────────────────────────────────────
 
@@ -49,7 +54,7 @@ mkdir -p "${PMA_INSTALL_DIR}/tmp"
 chmod 777 "${PMA_INSTALL_DIR}/tmp"
 
 print_message "Creating phpMyAdmin configuration tables..."
-MYSQL_PWD="${MARIADB_ROOT_PASSWORD}" mariadb -uroot < "${PMA_INSTALL_DIR}/sql/create_tables.sql"
+MYSQL_PWD="${DB_ROOT_PASSWORD}" "${DB_CLI}" -uroot < "${PMA_INSTALL_DIR}/sql/create_tables.sql"
 
 print_message "Configuring phpMyAdmin..."
 PMA_BLOWFISH=$(openssl rand -base64 24)

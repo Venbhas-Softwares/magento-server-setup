@@ -1,6 +1,46 @@
-# Module 07 — Varnish Cache installation and configuration
+# Module varnish — Varnish Cache installation and configuration
+# Uses: VARNISH_ENABLED, VARNISH_VERSION
 
-print_step "Installing Varnish Cache..."
+if [[ "${VARNISH_ENABLED:-yes}" != "yes" ]]; then
+    print_message "VARNISH_ENABLED=no — skipping Varnish. The application vhost (module: vhost) will bind port 80 directly instead."
+    return 0
+fi
+
+# Varnish's own maintainers publish an official apt repo per major/minor
+# series on packagecloud.io — the same "curl the vendor's setup script" model
+# already used for MariaDB in the database module. Ubuntu's own default repo
+# also ships an unversioned "varnish" package, so once the packagecloud repo
+# is added there are two sources for the same package name; pin the
+# packagecloud one so the exact requested series always wins, regardless of
+# which one happens to have the higher raw version number.
+case "$VARNISH_VERSION" in
+    6.0) VARNISH_PC_SERIES="varnish60lts" ;;
+    7.0) VARNISH_PC_SERIES="varnish70" ;;
+    7.4) VARNISH_PC_SERIES="varnish74" ;;
+    7.5) VARNISH_PC_SERIES="varnish75" ;;
+    *)
+        print_error "Unsupported VARNISH_VERSION '${VARNISH_VERSION}'"
+        exit 1
+        ;;
+esac
+
+print_step "Adding official Varnish ${VARNISH_VERSION} repository..."
+apt install -y curl gnupg
+if ! curl -s "https://packagecloud.io/install/repositories/varnishcache/${VARNISH_PC_SERIES}/script.deb.sh" | bash; then
+    print_error "Failed to add the Varnish ${VARNISH_VERSION} apt repository"
+    print_error "Not every series has published packages for every Ubuntu release at all times —"
+    print_error "check https://packagecloud.io/varnishcache/${VARNISH_PC_SERIES} if this persists."
+    exit 1
+fi
+
+cat > /etc/apt/preferences.d/varnish-pin <<EOF
+Package: varnish varnish-*
+Pin: release o=packagecloud.io/varnishcache/${VARNISH_PC_SERIES}
+Pin-Priority: 1000
+EOF
+
+print_step "Installing Varnish ${VARNISH_VERSION}..."
+apt update
 apt install -y varnish
 
 print_step "Configuring Varnish..."
@@ -91,9 +131,9 @@ EOF
 
 # ── FastCGI params — pass X-Forwarded-For to PHP-FPM ──────────────────────────
 # Nginx does not forward arbitrary headers to FastCGI unless explicitly mapped.
-# Add HTTP_X_FORWARDED_FOR so Magento (maintenance mode IP allowlist, request
-# logging) sees the real visitor IP that vcl_recv sets above, regardless of
-# whether SSL termination (module 11) is enabled.
+# Add HTTP_X_FORWARDED_FOR so the application (IP allowlists, request logging,
+# etc.) sees the real visitor IP that vcl_recv sets above, regardless of
+# whether SSL termination (module: ssl-termination) is enabled.
 
 if ! grep -q "HTTP_X_FORWARDED_FOR" /etc/nginx/fastcgi_params; then
     echo 'fastcgi_param  HTTP_X_FORWARDED_FOR  $http_x_forwarded_for;' \
@@ -131,4 +171,4 @@ systemctl daemon-reload
 systemctl enable varnish
 systemctl restart varnish
 
-print_message "Varnish configured on port 80 with Nginx backend on port 8080"
+print_message "Varnish ${VARNISH_VERSION} configured on port 80 with Nginx backend on port 8080"

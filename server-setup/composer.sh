@@ -1,5 +1,10 @@
-# Module 08 — Composer installation
-# Uses: RESTRICTED_USERNAME, COMPOSER_VERSION
+# Module composer — Composer installation
+# Uses: COMPOSER_ENABLED, RESTRICTED_USERNAME, COMPOSER_VERSION
+
+if [[ "${COMPOSER_ENABLED:-yes}" != "yes" ]]; then
+    print_message "COMPOSER_ENABLED=no — skipping Composer installation"
+    return 0
+fi
 
 print_step "Installing Composer ${COMPOSER_VERSION}..."
 COMPOSER_INSTALLER="/tmp/composer-installer.php"

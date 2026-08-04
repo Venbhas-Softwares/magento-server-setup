@@ -1,6 +1,12 @@
-# Module 05 — OpenSearch download, installation, and configuration
-# Uses: OPENSEARCH_VERSION, TOTAL_RAM_GB, ARCH (set by main script)
+# Module opensearch — OpenSearch download, installation, and configuration
+# Uses: OPENSEARCH_ENABLED, OPENSEARCH_VERSION, TOTAL_RAM_GB, ARCH (set by main script)
 # Sets: OPENSEARCH_HEAP
+
+if [[ "${OPENSEARCH_ENABLED:-yes}" != "yes" ]]; then
+    print_message "OPENSEARCH_ENABLED=no — skipping OpenSearch installation"
+    OPENSEARCH_HEAP=0
+    return 0
+fi
 
 # ── OpenSearch heap allocation ────────────────────────────────────────────────
 # 50% of RAM, capped at 8GB; capped at 1GB on servers with ≤6GB to leave

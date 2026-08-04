@@ -1,5 +1,5 @@
-# Module 10 — UFW firewall, SSH hardening, root SSH key setup
-# Uses: PMA_PORT, ROOT_USER_SSH_PUBLIC_KEY, ENABLE_SSL_TERMINATION
+# Module security — UFW firewall, SSH hardening, root SSH key setup
+# Uses: PHPMYADMIN_ENABLED, PMA_PORT, ROOT_USER_SSH_PUBLIC_KEY, ENABLE_SSL_TERMINATION
 
 print_step "Configuring UFW firewall..."
 apt install -y ufw
@@ -9,7 +9,9 @@ ufw allow 80/tcp
 if [[ "$ENABLE_SSL_TERMINATION" == "yes" ]]; then
     ufw allow 443/tcp
 fi
-ufw allow ${PMA_PORT}/tcp
+if [[ "${PHPMYADMIN_ENABLED:-yes}" == "yes" ]]; then
+    ufw allow ${PMA_PORT}/tcp
+fi
 
 print_step "Hardening SSH configuration..."
 sed -i 's/#PermitRootLogin yes/PermitRootLogin prohibit-password/'  /etc/ssh/sshd_config
@@ -56,7 +58,7 @@ if [[ ! -d "${_ru_ssh_dir}" ]]; then
 fi
 
 if [[ ! -f "${_ru_key}" ]]; then
-    ssh-keygen -t ed25519 -C "magento@${DOMAIN_NAME}" -f "${_ru_key}" -N ""
+    ssh-keygen -t ed25519 -C "${RESTRICTED_USERNAME}@${DOMAIN_NAME}" -f "${_ru_key}" -N ""
     chown "${RESTRICTED_USERNAME}:${RESTRICTED_USERNAME}" "${_ru_key}" "${_ru_key}.pub"
     chmod 600 "${_ru_key}"
     chmod 644 "${_ru_key}.pub"

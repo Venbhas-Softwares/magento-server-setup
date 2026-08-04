@@ -1,14 +1,27 @@
 #!/bin/bash
 #############################################################################
-# Magento Server Setup Script for Ubuntu 24.04
+# PHP Application Server Setup Script for Ubuntu 24.04
+# Provisions Nginx, PHP-FPM, a database (MariaDB or MySQL), and a set of
+# optional services (OpenSearch, Valkey, Varnish, Composer, phpMyAdmin) —
+# each individually toggleable in server-setup.conf. Framework-agnostic:
+# the web root it creates can be populated with Magento, WordPress, Drupal,
+# or any other PHP application.
 # Main entry point — validates config, calculates resources, then sources
-# each module in server-setup/ automatically in numeric order.
+# each module in server-setup/ in the order defined by MODULE_ORDER below.
 # IMPORTANT: This script MUST be run as root user only
 #############################################################################
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Canonical module run order. Filenames carry no numeric prefix — this array
+# is the single source of truth for both the default full run and for
+# resolving numeric --modules= tokens (position-based, 1-indexed).
+MODULE_ORDER=(
+    "system" "nginx" "php" "database" "opensearch" "valkey" "varnish"
+    "composer" "phpmyadmin" "security" "ssl-termination" "vhost" "finalize"
+)
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 
@@ -21,7 +34,7 @@ for _arg in "$@"; do
             for _t in "${_tokens[@]}"; do SELECTED_MODULES+=("$_t"); done
             ;;
         --modules)
-            echo "ERROR: --modules requires a value: --modules=03,05,09"
+            echo "ERROR: --modules requires a value: --modules=php,database,phpmyadmin (or by position: --modules=3,4,9)"
             exit 1
             ;;
     esac
@@ -82,7 +95,7 @@ print_message "Restricted user SSH public key validation passed"
 
 clear
 echo "============================================================================"
-echo "          Magento Server Setup Script"
+echo "          PHP Application Server Setup Script"
 echo "          Ubuntu 24.04 LTS"
 echo "============================================================================"
 echo ""
@@ -110,12 +123,31 @@ echo "Domain:             $DOMAIN_NAME"
 echo "Architecture:       $ARCH"
 echo "System Resources:   ${TOTAL_RAM_GB}GB RAM, ${CPU_CORES} CPU cores"
 echo "PHP Version:        $PHP_VERSION"
-echo "OpenSearch Version: $OPENSEARCH_VERSION"
-echo "Composer Version:   $COMPOSER_VERSION"
+if [[ "$DB_ENABLED" == "yes" ]]; then
+    echo "Database:           $DB_ENGINE $DB_VERSION"
+else
+    echo "Database:           disabled"
+fi
+if [[ "$OPENSEARCH_ENABLED" == "yes" ]]; then
+    echo "OpenSearch Version: $OPENSEARCH_VERSION"
+else
+    echo "OpenSearch:         disabled"
+fi
+echo "Valkey:             $([ "$VALKEY_ENABLED" == "yes" ] && echo enabled || echo disabled)"
+echo "Varnish:            $([ "$VARNISH_ENABLED" == "yes" ] && echo enabled || echo disabled)"
+if [[ "$COMPOSER_ENABLED" == "yes" ]]; then
+    echo "Composer Version:   $COMPOSER_VERSION"
+else
+    echo "Composer:           disabled"
+fi
 echo "Restricted User:    $RESTRICTED_USERNAME"
 echo "SSL Termination:    $ENABLE_SSL_TERMINATION"
-echo "phpMyAdmin Port:    $PMA_PORT"
-echo "phpMyAdmin Path:    (generated during phpMyAdmin module)"
+if [[ "$PHPMYADMIN_ENABLED" == "yes" ]]; then
+    echo "phpMyAdmin Port:    $PMA_PORT"
+    echo "phpMyAdmin Path:    (generated during phpmyadmin module)"
+else
+    echo "phpMyAdmin:         disabled"
+fi
 echo "============================================================================"
 echo ""
 
@@ -139,7 +171,10 @@ if [[ ${#SELECTED_MODULES[@]} -gt 0 ]]; then
         _modules_to_run+=("$_path")
     done
 else
-    _modules_to_run=("${MODULES_DIR}"/[0-9][0-9]-*.sh)
+    _modules_to_run=()
+    for _name in "${MODULE_ORDER[@]}"; do
+        _modules_to_run+=("${MODULES_DIR}/${_name}.sh")
+    done
 fi
 
 for module in "${_modules_to_run[@]}"; do

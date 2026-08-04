@@ -1,9 +1,9 @@
-# Module 11 — Nginx SSL termination (HTTPS :443 → Varnish :80)
+# Module ssl-termination — Nginx SSL termination (HTTPS :443 → whatever owns port 80)
 #
 # Optional module, controlled by ENABLE_SSL_TERMINATION in server-setup.conf.
 # Skip it entirely when TLS is already terminated upstream of this server
 # (Cloudflare "Flexible" mode, an external load balancer, another CDN) — in
-# that case Varnish stays the sole HTTP-facing service on port 80.
+# that case port 80 stays the sole HTTP-facing entry point.
 #
 # When enabled, this module either installs an operator-supplied certificate
 # (SSL_CERT_PATH / SSL_KEY_PATH) or generates a self-signed one suitable for
@@ -14,16 +14,18 @@
 # Server → Create Certificate).
 #
 # Adds an Nginx server block on port 443 that terminates TLS and proxies to
-# Varnish on port 80. Also ensures PHP-FPM receives the X-Forwarded-Proto
-# header so Magento can detect HTTPS via web/secure/offloader_header.
+# 127.0.0.1:80 — Varnish if it's enabled, otherwise the application vhost
+# directly. Also ensures PHP-FPM receives the X-Forwarded-Proto header so the
+# application can detect HTTPS (Magento reads it via web/secure/offloader_header;
+# most other frameworks have an equivalent "trust this proxy header" setting).
 #
 # Traffic flow when enabled:
-#   Edge/CDN HTTPS → Nginx :443 (TLS) → Varnish :80 → Nginx :8080 → PHP-FPM
+#   Edge/CDN HTTPS → Nginx :443 (TLS) → port 80 (Varnish, or the app vhost directly) → PHP-FPM
 #
 # Uses: DOMAIN_NAME, ENABLE_SSL_TERMINATION, SSL_CERT_PATH, SSL_KEY_PATH
 
 if [[ "$ENABLE_SSL_TERMINATION" != "yes" ]]; then
-    print_message "ENABLE_SSL_TERMINATION=no — skipping Nginx SSL termination. Varnish remains the sole HTTP-facing service on port 80."
+    print_message "ENABLE_SSL_TERMINATION=no — skipping Nginx SSL termination. Port 80 remains the sole HTTP-facing entry point."
     return 0
 fi
 
@@ -41,7 +43,7 @@ else
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
         -keyout /etc/nginx/ssl/cloudflare.key \
         -out    /etc/nginx/ssl/cloudflare.crt \
-        -subj   "/CN=${DOMAIN_NAME}/O=Magento/C=US"
+        -subj   "/CN=${DOMAIN_NAME}/O=Self-Signed/C=US"
     print_message "Certificate: /etc/nginx/ssl/cloudflare.crt (valid 10 years)"
 fi
 

@@ -1,4 +1,4 @@
-# Module 03 — PHP installation and configuration
+# Module php — PHP installation and configuration
 # Uses: PHP_VERSION, TOTAL_RAM_GB, CPU_CORES (set by main script)
 # Sets: PHP_MEMORY_LIMIT, PHP_MAX_CHILDREN, PHP_START_SERVERS, PHP_MIN_SPARE, PHP_MAX_SPARE
 

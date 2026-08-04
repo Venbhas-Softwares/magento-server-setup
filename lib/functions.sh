@@ -1,5 +1,5 @@
 #!/bin/bash
-# lib/functions.sh — Shared helper functions for Magento server setup.
+# lib/functions.sh — Shared helper functions for PHP application server setup.
 # Sourced by setup-ubuntu24.sh; not intended to be executed directly.
 
 # ── Temporary file tracking ───────────────────────────────────────────────────
@@ -40,11 +40,11 @@ load_config_safely() {
     local config_file="$1"
     local line_number=0
     local allowed_vars=(
-        "DOMAIN_NAME" "PHP_VERSION" "OPENSEARCH_VERSION" "COMPOSER_VERSION"
-        "MARIADB_VERSION" "MARIADB_ROOT_PASSWORD" "RESTRICTED_USERNAME" "ROOT_USER_SSH_PUBLIC_KEY"
-        "RESTRICTED_USER_SSH_PUBLIC_KEY"
+        "DOMAIN_NAME" "PHP_VERSION" "OPENSEARCH_ENABLED" "OPENSEARCH_VERSION" "COMPOSER_ENABLED" "COMPOSER_VERSION"
+        "DB_ENABLED" "DB_ENGINE" "DB_VERSION" "DB_ROOT_PASSWORD" "RESTRICTED_USERNAME" "ROOT_USER_SSH_PUBLIC_KEY"
+        "RESTRICTED_USER_SSH_PUBLIC_KEY" "VALKEY_ENABLED" "VARNISH_ENABLED" "VARNISH_VERSION" "PHPMYADMIN_ENABLED"
         "PMA_USERNAME" "PMA_PASSWORD" "PMA_PORT" "PMA_PATH"
-        "MAGENTO_DIR" "ENABLE_SSL_TERMINATION" "SSL_CERT_PATH" "SSL_KEY_PATH"
+        "WEB_ROOT" "ENABLE_SSL_TERMINATION" "SSL_CERT_PATH" "SSL_KEY_PATH"
     )
 
     while IFS= read -r line; do
@@ -89,35 +89,97 @@ load_config_safely() {
 # ── Validation functions ──────────────────────────────────────────────────────
 
 validate_server_config() {
+    # Every optional software component defaults to enabled so existing
+    # configs keep working unchanged. PHP and Nginx are not toggleable —
+    # they're the irreducible core of "a PHP application server".
+    OPENSEARCH_ENABLED="${OPENSEARCH_ENABLED:-yes}"
+    DB_ENABLED="${DB_ENABLED:-yes}"
+    VALKEY_ENABLED="${VALKEY_ENABLED:-yes}"
+    VARNISH_ENABLED="${VARNISH_ENABLED:-yes}"
+    COMPOSER_ENABLED="${COMPOSER_ENABLED:-yes}"
+    PHPMYADMIN_ENABLED="${PHPMYADMIN_ENABLED:-yes}"
+
+    for toggle_var in OPENSEARCH_ENABLED DB_ENABLED VALKEY_ENABLED VARNISH_ENABLED COMPOSER_ENABLED PHPMYADMIN_ENABLED; do
+        if [[ "${!toggle_var}" != "yes" && "${!toggle_var}" != "no" ]]; then
+            echo "ERROR: Invalid ${toggle_var} '${!toggle_var}'. Must be 'yes' or 'no'"
+            exit 1
+        fi
+    done
+    if [[ "$PHPMYADMIN_ENABLED" == "yes" && "$DB_ENABLED" == "no" ]]; then
+        echo "ERROR: PHPMYADMIN_ENABLED=yes requires DB_ENABLED=yes (phpMyAdmin has no database to administer otherwise)"
+        exit 1
+    fi
+
     local missing=()
     [[ -z "$DOMAIN_NAME" ]]           && missing+=("DOMAIN_NAME")
     [[ -z "$PHP_VERSION" ]]           && missing+=("PHP_VERSION")
-    [[ -z "$OPENSEARCH_VERSION" ]]    && missing+=("OPENSEARCH_VERSION")
-    [[ -z "$COMPOSER_VERSION" ]]      && missing+=("COMPOSER_VERSION")
-    [[ -z "$MARIADB_VERSION" ]]       && missing+=("MARIADB_VERSION")
-    [[ -z "$MARIADB_ROOT_PASSWORD" ]] && missing+=("MARIADB_ROOT_PASSWORD")
+    [[ "$COMPOSER_ENABLED" == "yes" && -z "$COMPOSER_VERSION" ]] && missing+=("COMPOSER_VERSION")
+    if [[ "$DB_ENABLED" == "yes" ]]; then
+        [[ -z "$DB_ENGINE" ]]         && missing+=("DB_ENGINE")
+        [[ -z "$DB_VERSION" ]]        && missing+=("DB_VERSION")
+        [[ -z "$DB_ROOT_PASSWORD" ]]  && missing+=("DB_ROOT_PASSWORD")
+    fi
+    [[ "$OPENSEARCH_ENABLED" == "yes" && -z "$OPENSEARCH_VERSION" ]] && missing+=("OPENSEARCH_VERSION")
+    [[ "$VARNISH_ENABLED" == "yes" && -z "$VARNISH_VERSION" ]] && missing+=("VARNISH_VERSION")
     [[ -z "$RESTRICTED_USERNAME" ]]       && missing+=("RESTRICTED_USERNAME")
     [[ -z "$ROOT_USER_SSH_PUBLIC_KEY" ]]        && missing+=("ROOT_USER_SSH_PUBLIC_KEY")
     [[ -z "$RESTRICTED_USER_SSH_PUBLIC_KEY" ]] && missing+=("RESTRICTED_USER_SSH_PUBLIC_KEY")
-    [[ -z "$PMA_PORT" ]]              && missing+=("PMA_PORT")
-    [[ -z "$PMA_USERNAME" ]]          && missing+=("PMA_USERNAME")
-    [[ -z "$PMA_PASSWORD" ]]          && missing+=("PMA_PASSWORD")
+    if [[ "$PHPMYADMIN_ENABLED" == "yes" ]]; then
+        [[ -z "$PMA_PORT" ]]          && missing+=("PMA_PORT")
+        [[ -z "$PMA_USERNAME" ]]      && missing+=("PMA_USERNAME")
+        [[ -z "$PMA_PASSWORD" ]]      && missing+=("PMA_PASSWORD")
+    fi
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "ERROR: Missing required config variables:"
         for var in "${missing[@]}"; do echo "  - $var"; done
         exit 1
     fi
-    if ! [[ "$PHP_VERSION" =~ ^8\.[1-5]$ ]]; then
-        echo "ERROR: Invalid PHP_VERSION '$PHP_VERSION'. Must be 8.1, 8.2, 8.3, 8.4, or 8.5"
+    if ! [[ "$PHP_VERSION" =~ ^7\.[0-4]$|^8\.[0-5]$ ]]; then
+        echo "ERROR: Invalid PHP_VERSION '$PHP_VERSION'. Must be 7.0–7.4 or 8.0–8.5"
         exit 1
     fi
-    if ! [[ "$MARIADB_VERSION" =~ ^(10\.[6-9]|10\.[1-9][0-9]|11\.[0-9]+)$ ]]; then
-        echo "ERROR: Invalid MARIADB_VERSION '$MARIADB_VERSION'. Must be 10.6+ or 11.x (e.g., 10.11, 11.4, 11.8)"
+    if [[ "$DB_ENABLED" == "yes" ]]; then
+        if [[ "$DB_ENGINE" != "mariadb" && "$DB_ENGINE" != "mysql" ]]; then
+            echo "ERROR: Invalid DB_ENGINE '$DB_ENGINE'. Must be 'mariadb' or 'mysql'"
+            exit 1
+        fi
+        if [[ "$DB_ENGINE" == "mariadb" ]]; then
+            if ! [[ "$DB_VERSION" =~ ^(10\.[6-9]|10\.[1-9][0-9]|11\.[0-9]+)$ ]]; then
+                echo "ERROR: Invalid DB_VERSION '$DB_VERSION' for DB_ENGINE=mariadb. Must be 10.6+ or 11.x (e.g., 10.11, 11.4, 11.8)"
+                exit 1
+            fi
+        else
+            local valid_mysql_versions=("5.6" "5.7" "8.0" "8.4")
+            local is_valid_mysql=0
+            for v in "${valid_mysql_versions[@]}"; do
+                [[ "$DB_VERSION" == "$v" ]] && is_valid_mysql=1 && break
+            done
+            if [[ $is_valid_mysql -eq 0 ]]; then
+                echo "ERROR: Invalid DB_VERSION '$DB_VERSION' for DB_ENGINE=mysql. Must be one of: ${valid_mysql_versions[*]}"
+                exit 1
+            fi
+        fi
+    fi
+    if [[ "$COMPOSER_ENABLED" == "yes" && "$COMPOSER_VERSION" != "1" && "$COMPOSER_VERSION" != "2" ]]; then
+        echo "ERROR: Invalid COMPOSER_VERSION '$COMPOSER_VERSION'. Must be '1' or '2'"
         exit 1
     fi
-    if ! [[ "$PMA_PORT" =~ ^[0-9]+$ ]] || [ "$PMA_PORT" -lt 1 ] || [ "$PMA_PORT" -gt 65535 ]; then
-        echo "ERROR: Invalid PMA_PORT '$PMA_PORT'. Must be 1–65535"
-        exit 1
+    if [[ "$VARNISH_ENABLED" == "yes" ]]; then
+        local valid_varnish_versions=("6.0" "7.0" "7.4" "7.5")
+        local is_valid_varnish=0
+        for v in "${valid_varnish_versions[@]}"; do
+            [[ "$VARNISH_VERSION" == "$v" ]] && is_valid_varnish=1 && break
+        done
+        if [[ $is_valid_varnish -eq 0 ]]; then
+            echo "ERROR: Invalid VARNISH_VERSION '$VARNISH_VERSION'. Must be one of: ${valid_varnish_versions[*]}"
+            exit 1
+        fi
+    fi
+    if [[ "$PHPMYADMIN_ENABLED" == "yes" ]]; then
+        if ! [[ "$PMA_PORT" =~ ^[0-9]+$ ]] || [ "$PMA_PORT" -lt 1 ] || [ "$PMA_PORT" -gt 65535 ]; then
+            echo "ERROR: Invalid PMA_PORT '$PMA_PORT'. Must be 1–65535"
+            exit 1
+        fi
     fi
 }
 
@@ -266,7 +328,10 @@ validate_resource_allocations() {
 
 # ── Module resolution ─────────────────────────────────────────────────────────
 # resolve_module <modules_dir> <token>
-# Accepts: numeric prefix ("03"), basename ("03-php.sh"), or full path.
+# Accepts: a 1-based position in the MODULE_ORDER array ("3"), a basename with
+# or without .sh ("php" / "php.sh"), or a full path. MODULE_ORDER (set by
+# setup-ubuntu24.sh) is the single source of truth for run order now that
+# module filenames no longer carry a numeric prefix.
 # Prints the resolved absolute path, or returns 1 on failure.
 
 resolve_module() {
@@ -276,20 +341,22 @@ resolve_module() {
     [[ "$token" == /* ]] && echo "$token" && return 0
 
     if [[ "$token" =~ ^[0-9]+$ ]]; then
-        local padded match
-        padded=$(printf "%02d" "$token")
-        match=$(find "$modules_dir" -maxdepth 1 -name "${padded}-*.sh" 2>/dev/null | head -1)
-        if [[ -z "$match" ]]; then
-            echo "ERROR: No module with number $token in $modules_dir" >&2
+        local idx=$((10#$token))
+        if [[ $idx -lt 1 || $idx -gt ${#MODULE_ORDER[@]} ]]; then
+            echo "ERROR: No module at position $token (valid range: 1-${#MODULE_ORDER[@]})" >&2
             return 1
         fi
-        echo "$match"
+        echo "${modules_dir}/${MODULE_ORDER[$((idx - 1))]}.sh"
         return 0
     fi
 
     if [[ "$token" != */* ]]; then
         local candidate="${modules_dir}/${token}"
         [[ -f "$candidate" ]] && echo "$candidate" && return 0
+        candidate="${modules_dir}/${token}.sh"
+        [[ -f "$candidate" ]] && echo "$candidate" && return 0
+        echo "ERROR: No module named '$token' in $modules_dir" >&2
+        return 1
     fi
 
     local rel="${token}"

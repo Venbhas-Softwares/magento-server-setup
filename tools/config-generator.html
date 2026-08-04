@@ -1,0 +1,1264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PHP Server Setup — Config Generator</title>
+<style>
+  :root {
+    --bg: #eef1f5;
+    --panel: #ffffff;
+    --panel-2: #f7f9fb;
+    --field: #ffffff;
+    --border: #d7dee6;
+    --border-strong: #b9c4d0;
+    --text: #16202b;
+    --muted: #57677a;
+    --muted-2: #7c8a9c;
+    --accent: #c97a1f;
+    --accent-strong: #a9650f;
+    --accent-ink: #fff7ec;
+    --good: #2f8f5b;
+    --good-bg: rgba(47,143,91,0.10);
+    --bad: #c94a63;
+    --bad-bg: rgba(201,74,99,0.10);
+    --radius-s: 4px;
+    --radius-m: 9px;
+    --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: ui-sans-serif, "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10151c;
+      --panel: #161d27;
+      --panel-2: #1b2430;
+      --field: #1c2530;
+      --border: #2c3947;
+      --border-strong: #3a4a5c;
+      --text: #e7ecf2;
+      --muted: #93a4b8;
+      --muted-2: #6d7d90;
+      --accent: #f0a13c;
+      --accent-strong: #ffb65c;
+      --accent-ink: #241505;
+      --good: #4fb477;
+      --good-bg: rgba(79,180,119,0.12);
+      --bad: #e2637a;
+      --bad-bg: rgba(226,99,122,0.12);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #10151c;
+    --panel: #161d27;
+    --panel-2: #1b2430;
+    --field: #1c2530;
+    --border: #2c3947;
+    --border-strong: #3a4a5c;
+    --text: #e7ecf2;
+    --muted: #93a4b8;
+    --muted-2: #6d7d90;
+    --accent: #f0a13c;
+    --accent-strong: #ffb65c;
+    --accent-ink: #241505;
+    --good: #4fb477;
+    --good-bg: rgba(79,180,119,0.12);
+    --bad: #e2637a;
+    --bad-bg: rgba(226,99,122,0.12);
+  }
+
+  :root[data-theme="light"] {
+    --bg: #eef1f5;
+    --panel: #ffffff;
+    --panel-2: #f7f9fb;
+    --field: #ffffff;
+    --border: #d7dee6;
+    --border-strong: #b9c4d0;
+    --text: #16202b;
+    --muted: #57677a;
+    --muted-2: #7c8a9c;
+    --accent: #c97a1f;
+    --accent-strong: #a9650f;
+    --accent-ink: #fff7ec;
+    --good: #2f8f5b;
+    --good-bg: rgba(47,143,91,0.10);
+    --bad: #c94a63;
+    --bad-bg: rgba(201,74,99,0.10);
+  }
+
+  * { box-sizing: border-box; }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--accent); }
+
+  .shell { max-width: 1360px; margin: 0 auto; padding: 32px 24px 72px; }
+
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 24px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+  .brand { max-width: 720px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: clamp(22px, 2.6vw, 30px);
+    margin: .4em 0 .45em;
+    letter-spacing: -.01em;
+    text-wrap: balance;
+  }
+  .lede { color: var(--muted); max-width: 62ch; margin: 0; font-size: 14px; }
+  .lede code {
+    font-family: var(--mono);
+    font-size: .92em;
+    background: var(--panel-2);
+    padding: .12em .4em;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  #themeToggle {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .04em;
+  }
+
+  .workbench {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
+    gap: 22px;
+    align-items: start;
+  }
+  @media (max-width: 980px) {
+    .workbench { grid-template-columns: 1fr; }
+    .preview-pane { position: static; }
+  }
+
+  .form-pane { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+  fieldset.card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    padding: 20px 22px 22px;
+    margin: 0;
+  }
+  .card legend {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0 6px;
+  }
+  .card-help { font-size: 12.5px; color: var(--muted-2); margin: -4px 0 14px; max-width: 60ch; }
+
+  .field-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px 16px;
+  }
+  .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .field.wide { grid-column: 1 / -1; }
+  .field label { font-size: 13px; font-weight: 600; }
+  .field .hint { font-size: 11.5px; color: var(--muted-2); }
+
+  input, select, textarea {
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--text);
+    background: var(--field);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-s);
+    padding: 9px 10px;
+    width: 100%;
+  }
+  textarea {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    resize: vertical;
+    min-height: 58px;
+  }
+  input::placeholder, textarea::placeholder { color: var(--muted-2); }
+  input:focus, select:focus, textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: var(--accent);
+  }
+  input[type="number"] { font-variant-numeric: tabular-nums; }
+
+  .field.invalid input, .field.invalid textarea, .field.invalid select { border-color: var(--bad); }
+  .field-msg { font-size: 11.5px; min-height: 14px; }
+  .field-msg.error { color: var(--bad); }
+  .field-msg.ok { color: var(--good); }
+
+  .input-row { display: flex; gap: 6px; }
+  .input-row input { flex: 1; min-width: 0; }
+  .input-row button { flex: none; }
+
+  button {
+    font-family: var(--sans);
+    font-size: 12.5px;
+    font-weight: 600;
+    border-radius: var(--radius-s);
+    border: 1px solid var(--border-strong);
+    background: var(--panel-2);
+    color: var(--text);
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+  button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  button.ghost:hover { color: var(--text); border-color: var(--border-strong); }
+
+  .segmented { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-s); overflow: hidden; }
+  .segmented button { border: none; border-radius: 0; background: var(--panel-2); }
+  .segmented button + button { border-left: 1px solid var(--border-strong); }
+  .segmented button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+  .sub-panel {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px dashed var(--border);
+  }
+  .sub-note { font-size: 12px; color: var(--muted-2); margin: 8px 0 0; }
+  .sub-note.warn { color: var(--bad); }
+  .sub-note.info { color: var(--accent); }
+
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .toggle-row .toggle-label { font-size: 13px; font-weight: 600; }
+  .toggle-row .toggle-help { font-size: 11.5px; color: var(--muted-2); margin-top: 2px; }
+
+  .form-actions { display: flex; justify-content: flex-end; }
+
+  .preview-pane { position: sticky; top: 24px; display: flex; flex-direction: column; gap: 12px; }
+
+  .status-strip { display: flex; flex-wrap: wrap; gap: 7px; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .03em;
+    padding: 4px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    background: var(--panel-2);
+  }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2); flex: none; }
+  .chip.ok { color: var(--good); background: var(--good-bg); }
+  .chip.ok .dot { background: var(--good); }
+  .chip.bad { color: var(--bad); background: var(--bad-bg); }
+  .chip.bad .dot { background: var(--bad); }
+
+  .preview-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+  .preview-title { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .preview-actions { display: flex; gap: 8px; }
+
+  #output {
+    margin: 0;
+    padding: 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.65;
+    color: var(--text);
+    overflow: auto;
+    max-height: 62vh;
+    white-space: pre;
+  }
+  #output .cm { color: var(--muted-2); }
+  #output .kv { color: var(--accent); }
+
+  .preview-note { font-size: 12px; color: var(--muted-2); max-width: 48ch; margin: 0; }
+  .preview-note code { font-family: var(--mono); font-size: .95em; }
+
+  footer.credit {
+    margin-top: 36px;
+    font-size: 12px;
+    color: var(--muted-2);
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
+
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="eyebrow">Ubuntu 24.04 · PHP application server provisioning</div>
+      <h1>server-setup.conf generator</h1>
+      <p class="lede">
+        Fill in the fields below to produce a ready-to-use <code>server-setup.conf</code> for the
+        <code>magento-server-setup</code> repo. It's framework-agnostic &mdash; the server it provisions works for
+        Magento, WordPress, Drupal, or any other PHP application. Every version and every optional service is a
+        dropdown or a switch below; nothing you type is uploaded, logged, or sent anywhere.
+      </p>
+    </div>
+    <button id="themeToggle" type="button" class="ghost">switch to dark</button>
+  </header>
+
+  <main class="workbench">
+
+    <section class="form-pane" aria-label="Configuration form">
+
+      <fieldset class="card">
+        <legend>Identity</legend>
+        <div class="field-grid">
+          <div class="field wide" id="f-domain">
+            <label for="domain">Domain name</label>
+            <input id="domain" type="text" placeholder="example.com" autocomplete="off" spellcheck="false">
+            <div class="field-msg" id="msg-domain"></div>
+          </div>
+          <div class="field" id="f-user">
+            <label for="restrictedUsername">Application user</label>
+            <input id="restrictedUsername" type="text" value="webuser" autocomplete="off" spellcheck="false">
+            <div class="hint">Linux user the app deploys as. No sudo access.</div>
+            <div class="field-msg" id="msg-user"></div>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>PHP &amp; Composer</legend>
+        <div class="field-grid">
+          <div class="field" id="f-php">
+            <label for="phpVersion">PHP version</label>
+            <select id="phpVersion">
+              <option>7.0</option>
+              <option>7.1</option>
+              <option>7.2</option>
+              <option>7.3</option>
+              <option>7.4</option>
+              <option>8.0</option>
+              <option>8.1</option>
+              <option>8.2</option>
+              <option>8.3</option>
+              <option selected>8.4</option>
+              <option>8.5</option>
+            </select>
+            <div class="field-msg" id="msg-php"></div>
+          </div>
+          <div class="field">
+            <label>Composer</label>
+            <div class="segmented" role="group" aria-label="Enable Composer">
+              <button type="button" id="composerYes" aria-pressed="true">Install</button>
+              <button type="button" id="composerNo" aria-pressed="false">Skip</button>
+            </div>
+          </div>
+          <div class="field" id="f-composer">
+            <label for="composerVersion">Composer version</label>
+            <select id="composerVersion">
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+            </select>
+            <div class="hint">1 is legacy but still supported by the setup script.</div>
+            <div class="field-msg" id="msg-composer"></div>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>Database</legend>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Install a database</div>
+            <div class="toggle-help">Turn off for a static site or an app using an external/managed database.</div>
+          </div>
+          <div class="segmented" role="group" aria-label="Enable database">
+            <button type="button" id="dbYes" aria-pressed="true">Install</button>
+            <button type="button" id="dbNo" aria-pressed="false">Skip</button>
+          </div>
+        </div>
+
+        <div class="sub-panel" id="dbFields">
+          <div class="segmented" role="group" aria-label="Database engine">
+            <button type="button" id="engineMariadb" aria-pressed="true">MariaDB</button>
+            <button type="button" id="engineMysql" aria-pressed="false">MySQL</button>
+          </div>
+
+          <div class="field-grid" style="margin-top:14px;">
+            <div class="field" id="f-dbversion">
+              <label for="dbVersion">Version</label>
+              <select id="dbVersion"></select>
+              <div class="field-msg" id="msg-dbversion"></div>
+            </div>
+            <div class="field" id="f-dbpw">
+              <label for="dbPw">Root password</label>
+              <div class="input-row">
+                <input id="dbPw" type="password" autocomplete="new-password">
+                <button type="button" class="ghost" data-toggle-visibility="dbPw">show</button>
+                <button type="button" data-generate="dbPw">generate</button>
+              </div>
+              <div class="field-msg" id="msg-dbpw"></div>
+            </div>
+          </div>
+          <p class="sub-note info" id="mysqlLegacyWarning" style="display:none;">
+            MySQL 5.6/5.7 are end-of-life and no longer in Oracle's apt repo for Ubuntu 24.04, so the setup
+            script installs these two via an auto-provisioned Docker container (official image) instead of
+            natively &mdash; the only place this toolchain depends on Docker. Use 8.0 or 8.4 unless you have
+            a specific legacy reason to pick an older series.
+          </p>
+        </div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>Optional services</legend>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">OpenSearch</div>
+            <div class="toggle-help">Search engine &mdash; used by Magento 2.4+, not needed by most other apps.</div>
+          </div>
+          <div class="segmented" role="group" aria-label="Enable OpenSearch">
+            <button type="button" id="osYes" aria-pressed="true">Install</button>
+            <button type="button" id="osNo" aria-pressed="false">Skip</button>
+          </div>
+        </div>
+        <div class="field-grid" id="osFields" style="margin-top:14px;">
+          <div class="field" id="f-opensearch">
+            <label for="openSearchVersion">OpenSearch version</label>
+            <select id="openSearchVersion">
+              <option value="2.11">2.11</option>
+              <option value="2.15">2.15</option>
+              <option value="2.19">2.19</option>
+              <option value="3.0.0">3.0.0</option>
+              <option value="3.5.0" selected>3.5.0</option>
+            </select>
+            <div class="field-msg" id="msg-opensearch"></div>
+          </div>
+        </div>
+
+        <div class="sub-panel">
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Valkey</div>
+              <div class="toggle-help">Redis-compatible cache/session store.</div>
+            </div>
+            <div class="segmented" role="group" aria-label="Enable Valkey">
+              <button type="button" id="valkeyYes" aria-pressed="true">Install</button>
+              <button type="button" id="valkeyNo" aria-pressed="false">Skip</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sub-panel">
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Varnish</div>
+              <div class="toggle-help">Full-page HTTP cache in front of Nginx. When off, Nginx serves port 80 directly.</div>
+            </div>
+            <div class="segmented" role="group" aria-label="Enable Varnish">
+              <button type="button" id="varnishYes" aria-pressed="true">Install</button>
+              <button type="button" id="varnishNo" aria-pressed="false">Skip</button>
+            </div>
+          </div>
+          <div class="field-grid" id="varnishFields" style="margin-top:14px;">
+            <div class="field" id="f-varnishversion">
+              <label for="varnishVersion">Varnish version</label>
+              <select id="varnishVersion">
+                <option value="6.0">6.0 (LTS)</option>
+                <option value="7.0">7.0</option>
+                <option value="7.4">7.4</option>
+                <option value="7.5" selected>7.5</option>
+              </select>
+              <div class="hint">From Varnish's own packagecloud.io repo. Not every series is guaranteed to have Ubuntu 24.04 packages at all times.</div>
+              <div class="field-msg" id="msg-varnishversion"></div>
+            </div>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>Access &amp; credentials</legend>
+        <p class="card-help">
+          SSH keys are the public half only &mdash; never paste a private key here.
+          Root gets key-only login; the application user gets an unprivileged shell plus <code>su -</code> access from root.
+        </p>
+        <div class="field-grid">
+          <div class="field wide" id="f-rootkey">
+            <label for="rootKey">Root SSH public key</label>
+            <textarea id="rootKey" placeholder="ssh-ed25519 AAAA... you@laptop" spellcheck="false"></textarea>
+            <div class="field-msg" id="msg-rootkey"></div>
+          </div>
+          <div class="field wide" id="f-userkey">
+            <label for="userKey" id="userKeyLabel">Application user SSH public key</label>
+            <textarea id="userKey" placeholder="ssh-ed25519 AAAA... you@laptop" spellcheck="false"></textarea>
+            <div class="field-msg" id="msg-userkey"></div>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>phpMyAdmin</legend>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Install phpMyAdmin</div>
+            <div class="toggle-help">Requires the database to be enabled above.</div>
+          </div>
+          <div class="segmented" role="group" aria-label="Enable phpMyAdmin">
+            <button type="button" id="pmaYes" aria-pressed="true">Install</button>
+            <button type="button" id="pmaNo" aria-pressed="false">Skip</button>
+          </div>
+        </div>
+        <div class="field-grid" id="pmaFields" style="margin-top:14px;">
+          <div class="field" id="f-pmauser">
+            <label for="pmaUsername">phpMyAdmin username</label>
+            <input id="pmaUsername" type="text" placeholder="pma_admin" autocomplete="off" spellcheck="false">
+            <div class="field-msg" id="msg-pmauser"></div>
+          </div>
+          <div class="field" id="f-pmapw">
+            <label for="pmaPw">phpMyAdmin password</label>
+            <div class="input-row">
+              <input id="pmaPw" type="password" autocomplete="new-password">
+              <button type="button" class="ghost" data-toggle-visibility="pmaPw">show</button>
+              <button type="button" data-generate="pmaPw">generate</button>
+            </div>
+            <div class="field-msg" id="msg-pmapw"></div>
+          </div>
+          <div class="field" id="f-pmaport">
+            <label for="pmaPort">phpMyAdmin port</label>
+            <div class="input-row">
+              <input id="pmaPort" type="number" min="1" max="65535" step="1">
+              <button type="button" data-roll-port>roll</button>
+            </div>
+            <div class="hint">Non-standard port; UFW opens only this one for phpMyAdmin.</div>
+            <div class="field-msg" id="msg-pmaport"></div>
+          </div>
+        </div>
+        <p class="sub-note" id="pmaSkippedNote" style="display:none;">phpMyAdmin will not be installed.</p>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>TLS termination</legend>
+        <p class="card-help">Optional. Skip it if TLS already ends upstream of this server (Cloudflare Flexible mode, a load balancer, another CDN).</p>
+        <div class="segmented" role="group" aria-label="Enable SSL termination">
+          <button type="button" id="sslYes" aria-pressed="true">Nginx terminates TLS</button>
+          <button type="button" id="sslNo" aria-pressed="false">Skip &mdash; terminated upstream</button>
+        </div>
+
+        <div class="sub-panel" id="sslCertPanel">
+          <div class="segmented" role="group" aria-label="Certificate source">
+            <button type="button" id="certAuto" aria-pressed="true">Auto-generate self-signed</button>
+            <button type="button" id="certCustom" aria-pressed="false">Use my own certificate</button>
+          </div>
+          <div class="field-grid" id="certFields" style="margin-top:14px; display:none;">
+            <div class="field" id="f-certpath">
+              <label for="sslCertPath">Certificate path</label>
+              <input id="sslCertPath" type="text" placeholder="/root/certs/origin.pem" autocomplete="off" spellcheck="false">
+              <div class="field-msg" id="msg-certpath"></div>
+            </div>
+            <div class="field" id="f-keypath">
+              <label for="sslKeyPath">Private key path</label>
+              <input id="sslKeyPath" type="text" placeholder="/root/certs/origin.key" autocomplete="off" spellcheck="false">
+              <div class="field-msg" id="msg-keypath"></div>
+            </div>
+          </div>
+          <p class="sub-note" id="sslSkippedNote" style="display:none;">Port 80 remains the sole HTTP-facing entry point (Varnish, if enabled, or Nginx directly). UFW will not open 443.</p>
+        </div>
+      </fieldset>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" id="resetBtn">Reset form</button>
+      </div>
+
+    </section>
+
+    <aside class="preview-pane" aria-label="Generated configuration preview">
+      <div class="status-strip" id="statusStrip" aria-live="polite"></div>
+
+      <div class="preview-card">
+        <div class="preview-head">
+          <span class="preview-title">server-setup.conf</span>
+          <div class="preview-actions">
+            <button type="button" id="copyBtn">copy</button>
+            <button type="button" class="primary" id="downloadBtn">download</button>
+          </div>
+        </div>
+        <pre id="output"></pre>
+      </div>
+
+      <p class="preview-note">
+        Copy this file to the server as <code>server-setup.conf</code> in your clone of the repo
+        (<code>chmod 600</code> it), then run <code>sudo bash setup-ubuntu24.sh</code>. This page does not
+        connect to any server &mdash; it only assembles text.
+      </p>
+    </aside>
+
+  </main>
+
+  <footer class="credit">
+    Generates a config file for <code>magento-server-setup</code>, a framework-agnostic PHP server provisioner.
+    Field checks mirror the loader in <code>lib/functions.sh</code>, but the setup script's own validation is
+    authoritative &mdash; review the file before use.
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- theme toggle -------------------------------------------------
+  var root = document.documentElement;
+  var themeBtn = document.getElementById("themeToggle");
+  function applyTheme(mode) {
+    if (mode) { root.setAttribute("data-theme", mode); }
+    else { root.removeAttribute("data-theme"); }
+    var effectiveDark = mode === "dark" || (!mode && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    themeBtn.textContent = effectiveDark ? "switch to light" : "switch to dark";
+  }
+  var savedTheme = null;
+  try { savedTheme = localStorage.getItem("mss-theme"); } catch (e) {}
+  applyTheme(savedTheme);
+  themeBtn.addEventListener("click", function () {
+    var current = root.getAttribute("data-theme");
+    var isDark = current === "dark" || (!current && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    var next = isDark ? "light" : "dark";
+    applyTheme(next);
+    try { localStorage.setItem("mss-theme", next); } catch (e) {}
+  });
+
+  // ---- element refs --------------------------------------------------
+  var el = {};
+  ["domain", "restrictedUsername", "phpVersion", "openSearchVersion", "dbVersion",
+   "composerVersion", "rootKey", "userKey", "dbPw", "pmaUsername", "pmaPw", "pmaPort",
+   "varnishVersion", "sslCertPath", "sslKeyPath"].forEach(function (id) { el[id] = document.getElementById(id); });
+
+  var output = document.getElementById("output");
+  var statusStrip = document.getElementById("statusStrip");
+  var userKeyLabel = document.getElementById("userKeyLabel");
+
+  function updateUserKeyLabel() {
+    var username = el.restrictedUsername.value.trim();
+    userKeyLabel.textContent = username
+      ? "Application user (" + username + ") SSH public key"
+      : "Application user SSH public key";
+  }
+
+  // ---- forbidden patterns (mirrors lib/functions.sh::load_config_safely) ----
+  // The loader scans every raw line of the file for these tokens and rejects
+  // the WHOLE file if any field's value contains one — including inside a
+  // password. Flag it client-side so a random password never breaks the load.
+  var FORBIDDEN = [
+    { re: /\$\(/, label: "$(" },
+    { re: /`/, label: "` (backtick)" },
+    { re: /&&/, label: "&&" },
+    { re: /\|\|/, label: "||" },
+    { re: /;/, label: ";" },
+    { re: /\|/, label: "|" },
+    { re: /eval/i, label: "eval" },
+    { re: /exec/i, label: "exec" },
+    { re: /source/i, label: "source" },
+    { re: /\.\//, label: "./" }
+  ];
+  var QUOTE_RE = /"/;
+
+  function forbiddenHit(value) {
+    if (QUOTE_RE.test(value)) return '" (breaks the quoted value)';
+    for (var i = 0; i < FORBIDDEN.length; i++) {
+      if (FORBIDDEN[i].re.test(value)) return FORBIDDEN[i].label;
+    }
+    return null;
+  }
+
+  // ---- validators ------------------------------------------------------
+  var DOMAIN_RE = /^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$/;
+  var USERNAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+  var SSH_KEY_RE = /^(ssh-rsa|ssh-dss|ecdsa-sha2-nistp\d+|ssh-ed25519)\s+([A-Za-z0-9+/]+=*)(\s+.*)?$/;
+
+  var MARIADB_VERSIONS = ["10.6", "10.11", "11.4", "11.8"];
+  var MYSQL_VERSIONS = ["5.6", "5.7", "8.0", "8.4"];
+  var MYSQL_LEGACY_VERSIONS = ["5.6", "5.7"];
+
+  function validateSshKey(raw) {
+    var key = raw.trim().replace(/\s+/g, " ");
+    if (!key) return { ok: false, msg: "Required." };
+    var forb = forbiddenHit(key);
+    if (forb) return { ok: false, msg: "Contains " + forb + " — not safe for the config loader." };
+    var m = key.match(SSH_KEY_RE);
+    if (!m) return { ok: false, msg: "Doesn't look like an SSH public key (ssh-rsa / ssh-ed25519 / ecdsa-sha2-* / ssh-dss)." };
+    var keyType = m[1], keyData = m[2];
+    var minLen = (keyType === "ssh-rsa" || keyType === "ssh-dss") ? 200 : 64;
+    if (keyData.length < minLen) return { ok: false, msg: "Key data looks truncated — paste the full line." };
+    return { ok: true, value: key };
+  }
+
+  function validateGeneric(id, value, opts) {
+    opts = opts || {};
+    if (!value && !opts.optional) return { ok: false, msg: "Required." };
+    if (value) {
+      var forb = forbiddenHit(value);
+      if (forb) return { ok: false, msg: "Contains " + forb + " — not safe for the config loader." };
+    }
+    return null;
+  }
+
+  function runValidation() {
+    var v = {};
+
+    v.domain = (function () {
+      var val = el.domain.value.trim();
+      var generic = validateGeneric("domain", val);
+      if (generic) return generic;
+      if (!DOMAIN_RE.test(val)) return { ok: false, msg: "Enter a valid domain, e.g. shop.example.com." };
+      return { ok: true, value: val };
+    })();
+
+    v.restrictedUsername = (function () {
+      var val = el.restrictedUsername.value.trim();
+      var generic = validateGeneric("user", val);
+      if (generic) return generic;
+      if (!USERNAME_RE.test(val)) return { ok: false, msg: "Lowercase, starts with a letter, letters/digits/-/_ only." };
+      return { ok: true, value: val };
+    })();
+
+    v.phpVersion = { ok: true, value: el.phpVersion.value };
+
+    v.openSearchVersion = state.osEnabled
+      ? { ok: true, value: el.openSearchVersion.value }
+      : { ok: true, value: "" };
+
+    v.dbVersion = state.dbEnabled
+      ? { ok: true, value: el.dbVersion.value }
+      : { ok: true, value: "" };
+
+    v.composerVersion = state.composerEnabled
+      ? { ok: true, value: el.composerVersion.value }
+      : { ok: true, value: "" };
+
+    v.varnishVersion = state.varnishEnabled
+      ? { ok: true, value: el.varnishVersion.value }
+      : { ok: true, value: "" };
+
+    v.rootKey = validateSshKey(el.rootKey.value);
+    v.userKey = validateSshKey(el.userKey.value);
+
+    v.dbPw = (function () {
+      if (!state.dbEnabled) return { ok: true, value: "" };
+      var val = el.dbPw.value;
+      var generic = validateGeneric("dbpw", val);
+      if (generic) return generic;
+      if (val.length < 12) return { ok: false, msg: "12+ characters recommended.", soft: true, value: val };
+      return { ok: true, value: val };
+    })();
+
+    v.pmaUsername = (function () {
+      if (!state.pmaEnabled) return { ok: true, value: "" };
+      var val = el.pmaUsername.value.trim();
+      var generic = validateGeneric("pmauser", val);
+      if (generic) return generic;
+      return { ok: true, value: val };
+    })();
+
+    v.pmaPw = (function () {
+      if (!state.pmaEnabled) return { ok: true, value: "" };
+      var val = el.pmaPw.value;
+      var generic = validateGeneric("pmapw", val);
+      if (generic) return generic;
+      if (val.length < 12) return { ok: false, msg: "12+ characters recommended.", soft: true, value: val };
+      return { ok: true, value: val };
+    })();
+
+    v.pmaPort = (function () {
+      if (!state.pmaEnabled) return { ok: true, value: "" };
+      var val = el.pmaPort.value.trim();
+      if (!val) return { ok: false, msg: "Required." };
+      var n = Number(val);
+      if (!Number.isInteger(n) || n < 1 || n > 65535) return { ok: false, msg: "Must be 1–65535." };
+      return { ok: true, value: String(n) };
+    })();
+
+    v.pmaDbDependency = (state.pmaEnabled && !state.dbEnabled)
+      ? { ok: false, msg: "phpMyAdmin requires the database to be enabled." }
+      : { ok: true };
+
+    var sslEnabled = state.sslEnabled;
+    v.sslCertPath = { ok: true, value: "" };
+    v.sslKeyPath = { ok: true, value: "" };
+    if (sslEnabled && state.certMode === "custom") {
+      v.sslCertPath = (function () {
+        var val = el.sslCertPath.value.trim();
+        var generic = validateGeneric("certpath", val);
+        if (generic) return generic;
+        if (val[0] !== "/") return { ok: false, msg: "Must be an absolute path." };
+        return { ok: true, value: val };
+      })();
+      v.sslKeyPath = (function () {
+        var val = el.sslKeyPath.value.trim();
+        var generic = validateGeneric("keypath", val);
+        if (generic) return generic;
+        if (val[0] !== "/") return { ok: false, msg: "Must be an absolute path." };
+        return { ok: true, value: val };
+      })();
+    }
+
+    return v;
+  }
+
+  function applyFieldFeedback(fieldId, msgId, result) {
+    var fieldEl = document.getElementById(fieldId);
+    var msgEl = document.getElementById(msgId);
+    if (!fieldEl || !msgEl) return;
+    if (!result || result.ok) {
+      fieldEl.classList.remove("invalid");
+      msgEl.textContent = (result && result.soft) ? result.msg : "";
+      msgEl.className = "field-msg";
+    } else {
+      fieldEl.classList.add("invalid");
+      msgEl.textContent = result.msg;
+      msgEl.className = "field-msg error";
+    }
+  }
+
+  // ---- toggle state ------------------------------------------------------
+  var state = {
+    sslEnabled: true, certMode: "auto",
+    dbEnabled: true, dbEngine: "mariadb",
+    osEnabled: true, valkeyEnabled: true, varnishEnabled: true,
+    composerEnabled: true, pmaEnabled: true
+  };
+
+  // Shared wiring for the many yes/no segmented toggles below. Returns the
+  // update() function so callers can re-sync button state after a
+  // programmatic change (e.g. Reset form).
+  function wireToggle(yesId, noId, stateKey, onChange) {
+    var yesBtn = document.getElementById(yesId);
+    var noBtn = document.getElementById(noId);
+    function update() {
+      yesBtn.setAttribute("aria-pressed", String(state[stateKey]));
+      noBtn.setAttribute("aria-pressed", String(!state[stateKey]));
+      if (onChange) onChange();
+    }
+    yesBtn.addEventListener("click", function () { state[stateKey] = true; update(); generate(); });
+    noBtn.addEventListener("click", function () { state[stateKey] = false; update(); generate(); });
+    update();
+    return update;
+  }
+
+  // ---- SSL / cert mode ----------------------------------------------------
+  var certAuto = document.getElementById("certAuto");
+  var certCustom = document.getElementById("certCustom");
+  var sslCertPanel = document.getElementById("sslCertPanel");
+  var certFields = document.getElementById("certFields");
+  var sslSkippedNote = document.getElementById("sslSkippedNote");
+
+  function updateSslUi() {
+    certAuto.setAttribute("aria-pressed", String(state.certMode === "auto"));
+    certCustom.setAttribute("aria-pressed", String(state.certMode === "custom"));
+    var certControls = sslCertPanel.querySelector(".segmented");
+    certControls.style.display = state.sslEnabled ? "" : "none";
+    certFields.style.display = (state.sslEnabled && state.certMode === "custom") ? "grid" : "none";
+    sslSkippedNote.style.display = state.sslEnabled ? "none" : "block";
+  }
+  wireToggle("sslYes", "sslNo", "sslEnabled", updateSslUi);
+  certAuto.addEventListener("click", function () { state.certMode = "auto"; updateSslUi(); generate(); });
+  certCustom.addEventListener("click", function () { state.certMode = "custom"; updateSslUi(); generate(); });
+  updateSslUi();
+
+  // ---- Database: enabled + engine + version options -----------------------
+  var dbFields = document.getElementById("dbFields");
+  var dbVersionSelect = document.getElementById("dbVersion");
+  var mysqlLegacyWarning = document.getElementById("mysqlLegacyWarning");
+  var engineMariadb = document.getElementById("engineMariadb");
+  var engineMysql = document.getElementById("engineMysql");
+
+  function updateDbVersionOptions() {
+    var versions = state.dbEngine === "mysql" ? MYSQL_VERSIONS : MARIADB_VERSIONS;
+    var previous = dbVersionSelect.value;
+    dbVersionSelect.innerHTML = "";
+    versions.forEach(function (v) {
+      var opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = v;
+      dbVersionSelect.appendChild(opt);
+    });
+    dbVersionSelect.value = versions.indexOf(previous) !== -1 ? previous : versions[versions.length - 1];
+    updateMysqlWarning();
+  }
+  function updateMysqlWarning() {
+    var isLegacy = state.dbEngine === "mysql" && MYSQL_LEGACY_VERSIONS.indexOf(dbVersionSelect.value) !== -1;
+    mysqlLegacyWarning.style.display = isLegacy ? "block" : "none";
+  }
+  function updateDbUi() {
+    dbFields.style.display = state.dbEnabled ? "block" : "none";
+    engineMariadb.setAttribute("aria-pressed", String(state.dbEngine === "mariadb"));
+    engineMysql.setAttribute("aria-pressed", String(state.dbEngine === "mysql"));
+  }
+  wireToggle("dbYes", "dbNo", "dbEnabled", updateDbUi);
+  engineMariadb.addEventListener("click", function () {
+    state.dbEngine = "mariadb"; updateDbUi(); updateDbVersionOptions(); generate();
+  });
+  engineMysql.addEventListener("click", function () {
+    state.dbEngine = "mysql"; updateDbUi(); updateDbVersionOptions(); generate();
+  });
+  dbVersionSelect.addEventListener("change", function () { updateMysqlWarning(); generate(); });
+  updateDbVersionOptions();
+  updateDbUi();
+
+  // ---- OpenSearch / Valkey / Varnish / Composer / phpMyAdmin toggles ------
+  var osFields = document.getElementById("osFields");
+  wireToggle("osYes", "osNo", "osEnabled", function () {
+    osFields.style.display = state.osEnabled ? "grid" : "none";
+  });
+
+  wireToggle("valkeyYes", "valkeyNo", "valkeyEnabled");
+
+  var varnishFields = document.getElementById("varnishFields");
+  wireToggle("varnishYes", "varnishNo", "varnishEnabled", function () {
+    varnishFields.style.display = state.varnishEnabled ? "grid" : "none";
+  });
+
+  var composerVersionField = document.getElementById("f-composer");
+  wireToggle("composerYes", "composerNo", "composerEnabled", function () {
+    composerVersionField.style.display = state.composerEnabled ? "" : "none";
+  });
+
+  var pmaFields = document.getElementById("pmaFields");
+  var pmaSkippedNote = document.getElementById("pmaSkippedNote");
+  wireToggle("pmaYes", "pmaNo", "pmaEnabled", function () {
+    pmaFields.style.display = state.pmaEnabled ? "grid" : "none";
+    pmaSkippedNote.style.display = state.pmaEnabled ? "none" : "block";
+  });
+
+  // ---- password generator / visibility --------------------------------
+  // Charset deliberately excludes ; | & $ ` ' " \ and whitespace so a
+  // generated password can never trip the config loader's injection filter.
+  var PW_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%^*_-+=?";
+  function generatePassword(len) {
+    len = len || 20;
+    var bytes = new Uint32Array(len);
+    window.crypto.getRandomValues(bytes);
+    var out = "";
+    for (var i = 0; i < len; i++) out += PW_CHARS[bytes[i] % PW_CHARS.length];
+    return out;
+  }
+  document.querySelectorAll("[data-generate]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var target = document.getElementById(btn.getAttribute("data-generate"));
+      target.value = generatePassword();
+      target.type = "text";
+      var toggle = document.querySelector('[data-toggle-visibility="' + target.id + '"]');
+      if (toggle) toggle.textContent = "hide";
+      generate();
+    });
+  });
+  document.querySelectorAll("[data-toggle-visibility]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var target = document.getElementById(btn.getAttribute("data-toggle-visibility"));
+      var isPw = target.type === "password";
+      target.type = isPw ? "text" : "password";
+      btn.textContent = isPw ? "hide" : "show";
+    });
+  });
+
+  // ---- port roller ------------------------------------------------------
+  document.querySelector("[data-roll-port]").addEventListener("click", function () {
+    var bytes = new Uint32Array(1);
+    window.crypto.getRandomValues(bytes);
+    el.pmaPort.value = 20000 + (bytes[0] % 45000);
+    generate();
+  });
+  if (!el.pmaPort.value) {
+    var initBytes = new Uint32Array(1);
+    window.crypto.getRandomValues(initBytes);
+    el.pmaPort.value = 20000 + (initBytes[0] % 45000);
+  }
+
+  // ---- output rendering ---------------------------------------------
+  function esc(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function line(cls, text) {
+    return '<span class="' + cls + '">' + esc(text) + "</span>\n";
+  }
+
+  // Reads straight from the DOM so the preview always mirrors exactly what's
+  // typed, regardless of validity — validity is communicated via the status
+  // chips and field messages instead, not by hiding text from the preview.
+  function buildOutput() {
+    var domain = el.domain.value.trim() || "example.com";
+    var sslEnabled = state.sslEnabled;
+    var certMode = state.certMode;
+
+    var out = "";
+    out += line("cm", "# server-setup.conf");
+    out += line("cm", "# Generated with tools/config-generator.html — review every value before use.");
+    out += "\n";
+    out += line("cm", "# ============================================================");
+    out += line("cm", "# SERVER SETUP (setup-ubuntu24.sh)");
+    out += line("cm", "# All values are REQUIRED unless the component they belong to is disabled");
+    out += line("cm", "# ============================================================");
+    out += line("kv", 'DOMAIN_NAME="' + el.domain.value.trim() + '"');
+    out += line("kv", 'PHP_VERSION="' + el.phpVersion.value + '"');
+    out += "\n";
+
+    out += line("kv", 'DB_ENABLED="' + (state.dbEnabled ? "yes" : "no") + '"');
+    if (state.dbEnabled) {
+      out += line("kv", 'DB_ENGINE="' + state.dbEngine + '"');
+      out += line("kv", 'DB_VERSION="' + el.dbVersion.value + '"');
+      out += line("kv", 'DB_ROOT_PASSWORD="' + el.dbPw.value + '"');
+    } else {
+      out += line("cm", "# DB_ENGINE=\"mariadb\"");
+      out += line("cm", "# DB_VERSION=\"11.4\"");
+      out += line("cm", "# DB_ROOT_PASSWORD=\"\"");
+    }
+    out += "\n";
+
+    out += line("kv", 'OPENSEARCH_ENABLED="' + (state.osEnabled ? "yes" : "no") + '"');
+    if (state.osEnabled) {
+      out += line("kv", 'OPENSEARCH_VERSION="' + el.openSearchVersion.value + '"');
+    } else {
+      out += line("cm", "# OPENSEARCH_VERSION=\"3.5.0\"");
+    }
+    out += line("kv", 'VALKEY_ENABLED="' + (state.valkeyEnabled ? "yes" : "no") + '"');
+    out += line("kv", 'VARNISH_ENABLED="' + (state.varnishEnabled ? "yes" : "no") + '"');
+    if (state.varnishEnabled) {
+      out += line("kv", 'VARNISH_VERSION="' + el.varnishVersion.value + '"');
+    } else {
+      out += line("cm", "# VARNISH_VERSION=\"7.5\"");
+    }
+    out += "\n";
+
+    out += line("kv", 'COMPOSER_ENABLED="' + (state.composerEnabled ? "yes" : "no") + '"');
+    if (state.composerEnabled) {
+      out += line("kv", 'COMPOSER_VERSION="' + el.composerVersion.value + '"');
+    } else {
+      out += line("cm", "# COMPOSER_VERSION=\"2\"");
+    }
+    out += "\n";
+
+    out += line("kv", 'RESTRICTED_USERNAME="' + el.restrictedUsername.value.trim() + '"');
+    out += line("kv", 'ROOT_USER_SSH_PUBLIC_KEY="' + el.rootKey.value.trim().replace(/\s+/g, " ") + '"');
+    out += line("kv", 'RESTRICTED_USER_SSH_PUBLIC_KEY="' + el.userKey.value.trim().replace(/\s+/g, " ") + '"');
+    out += "\n";
+
+    out += line("kv", 'PHPMYADMIN_ENABLED="' + (state.pmaEnabled ? "yes" : "no") + '"');
+    if (state.pmaEnabled) {
+      out += line("kv", 'PMA_PORT="' + el.pmaPort.value.trim() + '"');
+      out += line("kv", 'PMA_USERNAME="' + el.pmaUsername.value.trim() + '"');
+      out += line("kv", 'PMA_PASSWORD="' + el.pmaPw.value + '"');
+    } else {
+      out += line("cm", "# PMA_PORT=\"61098\"");
+      out += line("cm", "# PMA_USERNAME=\"\"");
+      out += line("cm", "# PMA_PASSWORD=\"\"");
+    }
+    out += "\n";
+    out += line("cm", "# ============================================================");
+    out += line("cm", "# SSL / TLS (optional — see server-setup/ssl-termination.sh)");
+    out += line("cm", "# ============================================================");
+    out += line("kv", 'ENABLE_SSL_TERMINATION="' + (sslEnabled ? "yes" : "no") + '"');
+    if (sslEnabled && certMode === "custom") {
+      out += line("kv", 'SSL_CERT_PATH="' + el.sslCertPath.value.trim() + '"');
+      out += line("kv", 'SSL_KEY_PATH="' + el.sslKeyPath.value.trim() + '"');
+    } else {
+      out += line("cm", "# SSL_CERT_PATH=\"/root/certs/origin.pem\"");
+      out += line("cm", "# SSL_KEY_PATH=\"/root/certs/origin.key\"");
+    }
+    out += "\n";
+    out += line("cm", "# ============================================================");
+    out += line("cm", "# GENERATED VALUES — populated automatically by setup-ubuntu24.sh");
+    out += line("cm", "# Do NOT edit these manually");
+    out += line("cm", "# ============================================================");
+    out += line("cm", "# PMA_PATH=\"...\"");
+    out += line("cm", '# WEB_ROOT="/var/www/' + domain + '"');
+
+    return out;
+  }
+
+  var STATUS_ITEMS = [
+    ["domain", "domain"], ["restrictedUsername", "user"], ["phpVersion", "php"],
+    ["rootKey", "root key"], ["userKey", "user key"],
+    ["dbVersion", "db version"], ["dbPw", "db password"],
+    ["openSearchVersion", "opensearch"], ["composerVersion", "composer"], ["varnishVersion", "varnish"],
+    ["pmaUsername", "pma user"], ["pmaPw", "pma password"], ["pmaPort", "pma port"],
+    ["pmaDbDependency", "pma needs db"],
+    ["sslCertPath", "cert path"], ["sslKeyPath", "key path"]
+  ];
+
+  function renderStatus(v) {
+    statusStrip.innerHTML = "";
+    var allOk = true;
+    STATUS_ITEMS.forEach(function (pair) {
+      var key = pair[0], label = pair[1];
+      var result = v[key];
+      if ((key === "dbVersion" || key === "dbPw") && !state.dbEnabled) return;
+      if (key === "openSearchVersion" && !state.osEnabled) return;
+      if (key === "composerVersion" && !state.composerEnabled) return;
+      if (key === "varnishVersion" && !state.varnishEnabled) return;
+      if ((key === "pmaUsername" || key === "pmaPw" || key === "pmaPort") && !state.pmaEnabled) return;
+      if (key === "pmaDbDependency" && !(state.pmaEnabled && !state.dbEnabled)) return;
+      if ((key === "sslCertPath" || key === "sslKeyPath") && !(state.sslEnabled && state.certMode === "custom")) return;
+      var ok = result && result.ok && !result.soft;
+      if (!ok) allOk = false;
+      var chip = document.createElement("span");
+      chip.className = "chip " + (ok ? "ok" : "bad");
+      chip.innerHTML = '<span class="dot"></span>' + label;
+      statusStrip.appendChild(chip);
+    });
+    var readyChip = document.createElement("span");
+    readyChip.className = "chip " + (allOk ? "ok" : "bad");
+    readyChip.innerHTML = '<span class="dot"></span>' + (allOk ? "ready" : "incomplete");
+    statusStrip.insertBefore(readyChip, statusStrip.firstChild);
+  }
+
+  var FIELD_MAP = {
+    domain: ["f-domain", "msg-domain"],
+    restrictedUsername: ["f-user", "msg-user"],
+    openSearchVersion: ["f-opensearch", "msg-opensearch"],
+    dbVersion: ["f-dbversion", "msg-dbversion"],
+    composerVersion: ["f-composer", "msg-composer"],
+    varnishVersion: ["f-varnishversion", "msg-varnishversion"],
+    rootKey: ["f-rootkey", "msg-rootkey"],
+    userKey: ["f-userkey", "msg-userkey"],
+    dbPw: ["f-dbpw", "msg-dbpw"],
+    pmaUsername: ["f-pmauser", "msg-pmauser"],
+    pmaPw: ["f-pmapw", "msg-pmapw"],
+    pmaPort: ["f-pmaport", "msg-pmaport"],
+    sslCertPath: ["f-certpath", "msg-certpath"],
+    sslKeyPath: ["f-keypath", "msg-keypath"]
+  };
+
+  function generate() {
+    var v = runValidation();
+    Object.keys(FIELD_MAP).forEach(function (key) {
+      applyFieldFeedback(FIELD_MAP[key][0], FIELD_MAP[key][1], v[key]);
+    });
+    updateUserKeyLabel();
+    output.innerHTML = buildOutput();
+    renderStatus(v);
+    return v;
+  }
+
+  // ---- copy / download -------------------------------------------------
+  document.getElementById("copyBtn").addEventListener("click", function () {
+    var text = output.textContent;
+    var btn = this;
+    function done(ok) {
+      btn.textContent = ok ? "copied" : "failed";
+      setTimeout(function () { btn.textContent = "copy"; }, 1400);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+    } else {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); done(true); } catch (e) { done(false); }
+      document.body.removeChild(ta);
+    }
+  });
+
+  document.getElementById("downloadBtn").addEventListener("click", function () {
+    var text = output.textContent;
+    var blob = new Blob([text], { type: "text/plain" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "server-setup.conf";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  });
+
+  document.getElementById("resetBtn").addEventListener("click", function () {
+    document.querySelectorAll("input[type=text], input[type=password], input[type=number], textarea").forEach(function (i) { i.value = ""; });
+    el.restrictedUsername.value = "webuser";
+    el.composerVersion.value = "2";
+    el.openSearchVersion.value = "3.5.0";
+    el.varnishVersion.value = "7.5";
+    el.phpVersion.value = "8.4";
+    var initBytes = new Uint32Array(1);
+    window.crypto.getRandomValues(initBytes);
+    el.pmaPort.value = 20000 + (initBytes[0] % 45000);
+
+    state.sslEnabled = true;
+    state.certMode = "auto";
+    state.dbEnabled = true;
+    state.dbEngine = "mariadb";
+    state.osEnabled = true;
+    state.valkeyEnabled = true;
+    state.varnishEnabled = true;
+    state.composerEnabled = true;
+    state.pmaEnabled = true;
+
+    updateSslUi();
+    updateDbUi();
+    updateDbVersionOptions();
+    osFields.style.display = "grid";
+    varnishFields.style.display = "grid";
+    composerVersionField.style.display = "";
+    pmaFields.style.display = "grid";
+    pmaSkippedNote.style.display = "none";
+    document.querySelectorAll(".segmented button[id$='Yes'], #engineMariadb").forEach(function (btn) {
+      btn.setAttribute("aria-pressed", "true");
+    });
+    document.querySelectorAll(".segmented button[id$='No'], #engineMysql").forEach(function (btn) {
+      btn.setAttribute("aria-pressed", "false");
+    });
+    generate();
+  });
+
+  // ---- wire up live updates -------------------------------------------
+  document.querySelectorAll("input, select, textarea").forEach(function (elm) {
+    elm.addEventListener("input", generate);
+    elm.addEventListener("change", generate);
+  });
+
+  generate();
+})();
+</script>
+</body>
+</html>

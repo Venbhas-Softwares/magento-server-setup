@@ -1,7 +1,7 @@
-# Module 01 — System update, essential packages, restricted user, and Magento web root
+# Module system — System update, essential packages, restricted user, and application web root
 # Sets web root ownership to restricted_user:www-data (authoritative — not repeated elsewhere).
 # Uses: RESTRICTED_USERNAME, DOMAIN_NAME
-# Sets: MAGENTO_DIR (used by modules 08 and 11)
+# Sets: WEB_ROOT (used by modules vhost and finalize)
 
 print_step "Updating system packages..."
 apt update && apt upgrade -y
@@ -24,8 +24,8 @@ chown -R "${RESTRICTED_USERNAME}:${RESTRICTED_USERNAME}" "${_ru_home}/.ssh"
 
 print_message "Restricted user configured with no sudo, key-based SSH login enabled (also reachable via: su - ${RESTRICTED_USERNAME})"
 
-print_step "Creating Magento web root..."
-MAGENTO_DIR="/var/www/${DOMAIN_NAME}"
-mkdir -p "$MAGENTO_DIR"
-chown -R ${RESTRICTED_USERNAME}:www-data "$MAGENTO_DIR"
-chmod -R 755 "$MAGENTO_DIR"
+print_step "Creating application web root..."
+WEB_ROOT="/var/www/${DOMAIN_NAME}"
+mkdir -p "$WEB_ROOT"
+chown -R ${RESTRICTED_USERNAME}:www-data "$WEB_ROOT"
+chmod -R 755 "$WEB_ROOT"
