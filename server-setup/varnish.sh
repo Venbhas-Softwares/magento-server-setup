@@ -1,5 +1,21 @@
 # Module varnish — Varnish Cache installation and configuration
-# Uses: VARNISH_ENABLED, VARNISH_VERSION
+# Uses: VARNISH_ENABLED, VARNISH_VERSION, VARNISH_CACHE_MB (set by lib/functions.sh::calculate_resource_allocations)
+#
+# No default.vcl is written by this repo. The application (Magento, etc.)
+# generates its own VCL at deploy time, which is the only VCL that correctly
+# handles PURGE/tag-based invalidation, backend health probing, and hashing
+# on X-Forwarded-Proto for that specific application. Shipping a competing,
+# hand-rolled VCL here was scope creep and the source of two prior critical
+# bugs: it cached Set-Cookie responses (session leakage between customers)
+# and never hashed on scheme (HTTP/HTTPS cache-object collisions).
+#
+# Ubuntu's stock /etc/varnish/default.vcl already points at 127.0.0.1:8080 —
+# this exact topology — and ships no custom logic, so the builtin VCL applies:
+# conservative by design, passing (not caching) any request/response carrying
+# cookies. Since Magento and most PHP apps send session cookies on nearly
+# everything, Varnish acts as a near-transparent proxy until the real
+# application VCL is installed post-deploy. The builtin VCL also appends
+# X-Forwarded-For automatically for anything it does pass through.
 
 if [[ "${VARNISH_ENABLED:-yes}" != "yes" ]]; then
     print_message "VARNISH_ENABLED=no — skipping Varnish. The application vhost (module: vhost) will bind port 80 directly instead."
@@ -43,97 +59,11 @@ print_step "Installing Varnish ${VARNISH_VERSION}..."
 apt update
 apt install -y varnish
 
-print_step "Configuring Varnish..."
-cat > /etc/varnish/default.vcl <<'EOF'
-vcl 4.0;
-
-import std;
-
-backend default {
-    .host = "127.0.0.1";
-    .port = "8080";
-    .first_byte_timeout = 600s;
-    .connect_timeout = 600s;
-    .between_bytes_timeout = 600s;
-}
-
-acl purge {
-    "localhost";
-    "127.0.0.1";
-}
-
-sub vcl_recv {
-    # Preserve the real client IP for the backend. Varnish's builtin vcl_recv
-    # normally appends this automatically, but every branch below returns
-    # explicitly, which skips the builtin's appended logic — set it here instead.
-    if (req.http.X-Forwarded-For) {
-        set req.http.X-Forwarded-For = req.http.X-Forwarded-For + ", " + client.ip;
-    } else {
-        set req.http.X-Forwarded-For = client.ip;
-    }
-
-    if (req.method == "PURGE") {
-        if (!client.ip ~ purge) {
-            return (synth(405, "Not allowed"));
-        }
-        return (purge);
-    }
-
-    if (req.url ~ "^/admin"    || req.url ~ "^/index.php/admin") { return (pass); }
-    if (req.url ~ "^/checkout")  { return (pass); }
-    if (req.url ~ "^/customer")  { return (pass); }
-    if (req.url ~ "^/cart")      { return (pass); }
-    if (req.url ~ "^/wishlist")  { return (pass); }
-
-    if (req.method != "GET" && req.method != "HEAD") {
-        return (pass);
-    }
-
-    if (req.http.Cookie) {
-        set req.http.Cookie = ";" + req.http.Cookie;
-        set req.http.Cookie = regsuball(req.http.Cookie, "; +", ";");
-        set req.http.Cookie = regsuball(req.http.Cookie, ";(PHPSESSID|frontend)=", "; \1=");
-        set req.http.Cookie = regsuball(req.http.Cookie, ";[^ ][^;]*", "");
-        set req.http.Cookie = regsuball(req.http.Cookie, "^[; ]+|[; ]+$", "");
-        if (req.http.Cookie == "") {
-            unset req.http.Cookie;
-        }
-    }
-
-    return (hash);
-}
-
-sub vcl_backend_response {
-    if (bereq.url ~ "\.(jpg|jpeg|png|gif|gz|css|js|ico|svg|webp)$") {
-        set beresp.ttl = 24h;
-        set beresp.http.cache-control = "public, max-age=86400";
-    }
-    if (beresp.http.content-type ~ "text/html") {
-        set beresp.ttl = 10m;
-        set beresp.http.cache-control = "public, max-age=600";
-    }
-    return (deliver);
-}
-
-sub vcl_deliver {
-    if (obj.hits > 0) {
-        set resp.http.X-Cache = "HIT";
-    } else {
-        set resp.http.X-Cache = "MISS";
-    }
-    set resp.http.X-Cache-Hits = obj.hits;
-}
-
-sub vcl_purge {
-    return (synth(200, "Purged"));
-}
-EOF
-
 # ── FastCGI params — pass X-Forwarded-For to PHP-FPM ──────────────────────────
 # Nginx does not forward arbitrary headers to FastCGI unless explicitly mapped.
 # Add HTTP_X_FORWARDED_FOR so the application (IP allowlists, request logging,
-# etc.) sees the real visitor IP that vcl_recv sets above, regardless of
-# whether SSL termination (module: ssl-termination) is enabled.
+# etc.) sees the real visitor IP that Varnish's builtin vcl_recv appends,
+# regardless of whether SSL termination (module: ssl-termination) is enabled.
 
 if ! grep -q "HTTP_X_FORWARDED_FOR" /etc/nginx/fastcgi_params; then
     echo 'fastcgi_param  HTTP_X_FORWARDED_FOR  $http_x_forwarded_for;' \
@@ -141,34 +71,47 @@ if ! grep -q "HTTP_X_FORWARDED_FOR" /etc/nginx/fastcgi_params; then
     print_message "Added HTTP_X_FORWARDED_FOR to /etc/nginx/fastcgi_params"
 fi
 
-# Move Nginx to port 8080 so Varnish can own port 80
-sed -i 's/listen 80;/listen 8080;/'                 /etc/nginx/sites-available/default 2>/dev/null || true
-sed -i 's/listen \[\:\:\]\:80;/listen [::]:8080;/'  /etc/nginx/sites-available/default 2>/dev/null || true
+# ── Listen address + cache size — the only things package defaults can't know ─
+# A systemd drop-in overriding only ExecStart, rather than a full unit
+# replacement, keeps the package's own ExecReload (the correct
+# varnishreload helper — the previous hand-rolled unit pointed at a path
+# that doesn't exist in Ubuntu's package), sandboxing directives, and any
+# future unit updates the package brings.
 
-cat > /etc/systemd/system/varnish.service <<EOF
-[Unit]
-Description=Varnish HTTP accelerator
-Documentation=https://www.varnish-cache.org/docs/
-After=network-online.target
-Wants=network-online.target
-
+print_step "Configuring Varnish to listen on port 80 with a ${VARNISH_CACHE_MB:-256}MB cache..."
+mkdir -p /etc/systemd/system/varnish.service.d
+cat > /etc/systemd/system/varnish.service.d/override.conf <<EOF
 [Service]
-Type=simple
-User=root
-ProtectSystem=full
-ProtectHome=yes
-NoNewPrivileges=yes
-ExecStart=/usr/sbin/varnishd -j unix,user=vcache -F -a 0.0.0.0:80 -T 127.0.0.1:6082 -f /etc/varnish/default.vcl -S /etc/varnish/secret -s malloc,256m
-ExecReload=/usr/share/varnish/varnishreload.sh
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+ExecStart=
+ExecStart=/usr/sbin/varnishd -j unix,user=vcache -a :80 -T localhost:6082 -f /etc/varnish/default.vcl -S /etc/varnish/secret -s malloc,${VARNISH_CACHE_MB:-256}m
 EOF
 
 systemctl daemon-reload
 systemctl enable varnish
 systemctl restart varnish
 
-print_message "Varnish ${VARNISH_VERSION} configured on port 80 with Nginx backend on port 8080"
+# ── Verify the bind actually took ──────────────────────────────────────────────
+# Type=simple (set by the package unit) makes systemctl report success even if
+# varnishd exits immediately after failing to bind — without this check, a
+# failed bind (something else on :80, a bad drop-in) goes unnoticed until the
+# operator finds the site unreachable.
+
+print_step "Verifying Varnish bound to port 80..."
+VARNISH_BOUND=0
+for _ in $(seq 1 10); do
+    if ss -tlnp 2>/dev/null | grep -q ':80.*varnishd' || curl -sI --max-time 2 http://127.0.0.1:80 >/dev/null 2>&1; then
+        VARNISH_BOUND=1
+        break
+    fi
+    sleep 1
+done
+
+if [[ $VARNISH_BOUND -ne 1 ]]; then
+    print_error "Varnish did not bind to port 80 after restart — check: systemctl status varnish"
+    print_error "Common causes: something else already listening on :80, or a bad ExecStart override in"
+    print_error "/etc/systemd/system/varnish.service.d/override.conf"
+    exit 1
+fi
+
+print_message "Varnish ${VARNISH_VERSION} configured on port 80 with Nginx backend on port 8080 (no custom VCL — package default in effect)"
+print_warning "Full Page Cache is inactive until the application's own VCL is installed post-deploy (see server_setup_info.txt)."

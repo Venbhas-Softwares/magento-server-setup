@@ -1,23 +1,11 @@
 # Module opensearch — OpenSearch download, installation, and configuration
-# Uses: OPENSEARCH_ENABLED, OPENSEARCH_VERSION, TOTAL_RAM_GB, ARCH (set by main script)
-# Sets: OPENSEARCH_HEAP
+# Uses: OPENSEARCH_ENABLED, OPENSEARCH_VERSION, ARCH (set by main script),
+#       OPENSEARCH_HEAP (set by lib/functions.sh::calculate_resource_allocations)
 
 if [[ "${OPENSEARCH_ENABLED:-yes}" != "yes" ]]; then
     print_message "OPENSEARCH_ENABLED=no — skipping OpenSearch installation"
-    OPENSEARCH_HEAP=0
     return 0
 fi
-
-# ── OpenSearch heap allocation ────────────────────────────────────────────────
-# 50% of RAM, capped at 8GB; capped at 1GB on servers with ≤6GB to leave
-# headroom for PHP-FPM and the OS.
-
-OPENSEARCH_HEAP=$((TOTAL_RAM_GB * 512))
-[ $OPENSEARCH_HEAP -gt 8192 ] && OPENSEARCH_HEAP=8192
-if [ $TOTAL_RAM_GB -le 6 ] && [ $OPENSEARCH_HEAP -gt 1024 ]; then
-    OPENSEARCH_HEAP=1024
-fi
-[ $OPENSEARCH_HEAP -lt 1024 ] && OPENSEARCH_HEAP=1024
 
 print_message "OpenSearch heap allocation: ${OPENSEARCH_HEAP}MB"
 

@@ -1,19 +1,10 @@
 # Module valkey — Valkey installation and configuration
-# Uses: VALKEY_ENABLED, TOTAL_RAM_GB (set by main script)
-# Sets: VALKEY_MEMORY
+# Uses: VALKEY_ENABLED, VALKEY_MEMORY (set by lib/functions.sh::calculate_resource_allocations)
 
 if [[ "${VALKEY_ENABLED:-yes}" != "yes" ]]; then
     print_message "VALKEY_ENABLED=no — skipping Valkey installation"
-    VALKEY_MEMORY=0
     return 0
 fi
-
-# ── Valkey memory allocation ──────────────────────────────────────────────────
-# 10% of RAM, capped at 2GB, minimum 256MB.
-
-VALKEY_MEMORY=$((TOTAL_RAM_GB * 1024 / 10))
-[ $VALKEY_MEMORY -gt 2048 ] && VALKEY_MEMORY=2048
-[ $VALKEY_MEMORY -lt 256  ] && VALKEY_MEMORY=256
 
 print_message "Valkey memory allocation: ${VALKEY_MEMORY}MB"
 

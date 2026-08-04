@@ -242,6 +242,7 @@
   .segmented button { border: none; border-radius: 0; background: var(--panel-2); }
   .segmented button + button { border-left: 1px solid var(--border-strong); }
   .segmented button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  .segmented button:disabled { opacity: .45; cursor: not-allowed; }
 
   .sub-panel {
     margin-top: 16px;
@@ -521,18 +522,65 @@
         <legend>Access &amp; credentials</legend>
         <p class="card-help">
           SSH keys are the public half only &mdash; never paste a private key here.
-          Root gets key-only login; the application user gets an unprivileged shell plus <code>su -</code> access from root.
+          Root and the application user each pick key or password independently &mdash; the application
+          user always gets an unprivileged shell plus <code>su -</code> access from root.
         </p>
-        <div class="field-grid">
+
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Application user SSH access</div>
+            <div class="toggle-help">Some servers only accept key-based SSH; others require passwords.</div>
+          </div>
+          <div class="segmented" role="group" aria-label="Application user SSH auth method">
+            <button type="button" id="userAuthKey" aria-pressed="true">SSH key</button>
+            <button type="button" id="userAuthPw" aria-pressed="false">Password</button>
+          </div>
+        </div>
+        <div class="field-grid" id="userKeyFieldWrap">
+          <div class="field wide" id="f-userkey">
+            <label for="userKey" id="userKeyLabel">Application user SSH public key</label>
+            <textarea id="userKey" placeholder="ssh-ed25519 AAAA... you@laptop" spellcheck="false"></textarea>
+            <div class="field-msg" id="msg-userkey"></div>
+          </div>
+        </div>
+        <div class="field-grid" id="userPwFieldWrap" style="display:none;">
+          <div class="field" id="f-restrictedpw">
+            <label for="restrictedPw" id="restrictedPwLabel">Application user password</label>
+            <div class="input-row">
+              <input id="restrictedPw" type="password" autocomplete="new-password">
+              <button type="button" class="ghost" data-toggle-visibility="restrictedPw">show</button>
+              <button type="button" data-generate="restrictedPw">generate</button>
+            </div>
+            <div class="field-msg" id="msg-restrictedpw"></div>
+          </div>
+        </div>
+
+        <div class="toggle-row" style="margin-top:14px;">
+          <div>
+            <div class="toggle-label">Root SSH access</div>
+            <div class="toggle-help" id="rootAuthHelp">Resetting root's password isn't always wanted, so it stays key-only by default.</div>
+          </div>
+          <div class="segmented" role="group" aria-label="Root SSH auth method">
+            <button type="button" id="rootAuthKey" aria-pressed="true">SSH key</button>
+            <button type="button" id="rootAuthPw" aria-pressed="false" disabled>Password</button>
+          </div>
+        </div>
+        <div class="field-grid" id="rootKeyFieldWrap">
           <div class="field wide" id="f-rootkey">
             <label for="rootKey">Root SSH public key</label>
             <textarea id="rootKey" placeholder="ssh-ed25519 AAAA... you@laptop" spellcheck="false"></textarea>
             <div class="field-msg" id="msg-rootkey"></div>
           </div>
-          <div class="field wide" id="f-userkey">
-            <label for="userKey" id="userKeyLabel">Application user SSH public key</label>
-            <textarea id="userKey" placeholder="ssh-ed25519 AAAA... you@laptop" spellcheck="false"></textarea>
-            <div class="field-msg" id="msg-userkey"></div>
+        </div>
+        <div class="field-grid" id="rootPwFieldWrap" style="display:none;">
+          <div class="field" id="f-rootpw">
+            <label for="rootPw">Root account password</label>
+            <div class="input-row">
+              <input id="rootPw" type="password" autocomplete="new-password">
+              <button type="button" class="ghost" data-toggle-visibility="rootPw">show</button>
+              <button type="button" data-generate="rootPw">generate</button>
+            </div>
+            <div class="field-msg" id="msg-rootpw"></div>
           </div>
         </div>
       </fieldset>
@@ -671,17 +719,21 @@
   var el = {};
   ["domain", "restrictedUsername", "phpVersion", "openSearchVersion", "dbVersion",
    "composerVersion", "rootKey", "userKey", "dbPw", "pmaUsername", "pmaPw", "pmaPort",
-   "varnishVersion", "sslCertPath", "sslKeyPath"].forEach(function (id) { el[id] = document.getElementById(id); });
+   "varnishVersion", "sslCertPath", "sslKeyPath", "rootPw", "restrictedPw"].forEach(function (id) { el[id] = document.getElementById(id); });
 
   var output = document.getElementById("output");
   var statusStrip = document.getElementById("statusStrip");
   var userKeyLabel = document.getElementById("userKeyLabel");
+  var restrictedPwLabel = document.getElementById("restrictedPwLabel");
 
   function updateUserKeyLabel() {
     var username = el.restrictedUsername.value.trim();
     userKeyLabel.textContent = username
       ? "Application user (" + username + ") SSH public key"
       : "Application user SSH public key";
+    restrictedPwLabel.textContent = username
+      ? "Application user (" + username + ") password"
+      : "Application user password";
   }
 
   // ---- forbidden patterns (mirrors lib/functions.sh::load_config_safely) ----
@@ -732,6 +784,14 @@
     return { ok: true, value: key };
   }
 
+  function validateAuthPassword(raw) {
+    var val = raw;
+    var generic = validateGeneric("pw", val);
+    if (generic) return generic;
+    if (val.length < 12) return { ok: false, msg: "Must be at least 12 characters (enforced by the setup script)." };
+    return { ok: true, value: val };
+  }
+
   function validateGeneric(id, value, opts) {
     opts = opts || {};
     if (!value && !opts.optional) return { ok: false, msg: "Required." };
@@ -779,8 +839,17 @@
       ? { ok: true, value: el.varnishVersion.value }
       : { ok: true, value: "" };
 
-    v.rootKey = validateSshKey(el.rootKey.value);
-    v.userKey = validateSshKey(el.userKey.value);
+    // Each account is key-only or password-only, never both — whichever
+    // field isn't showing for an account isn't validated either.
+    v.rootKey = state.rootPasswordAuthEnabled ? { ok: true, value: "" } : validateSshKey(el.rootKey.value);
+    v.userKey = state.sshPasswordAuthEnabled ? { ok: true, value: "" } : validateSshKey(el.userKey.value);
+
+    v.rootPw = state.rootPasswordAuthEnabled
+      ? validateAuthPassword(el.rootPw.value)
+      : { ok: true, value: "" };
+    v.restrictedPw = state.sshPasswordAuthEnabled
+      ? validateAuthPassword(el.restrictedPw.value)
+      : { ok: true, value: "" };
 
     v.dbPw = (function () {
       if (!state.dbEnabled) return { ok: true, value: "" };
@@ -864,7 +933,8 @@
     sslEnabled: true, certMode: "auto",
     dbEnabled: true, dbEngine: "mariadb",
     osEnabled: true, valkeyEnabled: true, varnishEnabled: true,
-    composerEnabled: true, pmaEnabled: true
+    composerEnabled: true, pmaEnabled: true,
+    sshPasswordAuthEnabled: false, rootPasswordAuthEnabled: false
   };
 
   // Shared wiring for the many yes/no segmented toggles below. Returns the
@@ -968,6 +1038,49 @@
     pmaFields.style.display = state.pmaEnabled ? "grid" : "none";
     pmaSkippedNote.style.display = state.pmaEnabled ? "none" : "block";
   });
+
+  // ---- SSH access: key vs. password, independently per account ------------
+  // Root's password toggle is only usable once the application user's is on
+  // (mirrors the backend: ROOT_PASSWORD_AUTH_ENABLED=yes requires
+  // SSH_PASSWORD_AUTH_ENABLED=yes, since sshd's PasswordAuthentication is a
+  // single server-wide switch). Each account shows exactly one field —
+  // never both key and password at once.
+  var userAuthKey = document.getElementById("userAuthKey");
+  var userAuthPw = document.getElementById("userAuthPw");
+  var rootAuthKey = document.getElementById("rootAuthKey");
+  var rootAuthPw = document.getElementById("rootAuthPw");
+  var userKeyFieldWrap = document.getElementById("userKeyFieldWrap");
+  var userPwFieldWrap = document.getElementById("userPwFieldWrap");
+  var rootKeyFieldWrap = document.getElementById("rootKeyFieldWrap");
+  var rootPwFieldWrap = document.getElementById("rootPwFieldWrap");
+  var rootAuthHelp = document.getElementById("rootAuthHelp");
+
+  function updateAuthUi() {
+    userAuthKey.setAttribute("aria-pressed", String(!state.sshPasswordAuthEnabled));
+    userAuthPw.setAttribute("aria-pressed", String(state.sshPasswordAuthEnabled));
+    userKeyFieldWrap.style.display = state.sshPasswordAuthEnabled ? "none" : "grid";
+    userPwFieldWrap.style.display = state.sshPasswordAuthEnabled ? "grid" : "none";
+
+    if (!state.sshPasswordAuthEnabled) {
+      state.rootPasswordAuthEnabled = false;
+    }
+    rootAuthPw.disabled = !state.sshPasswordAuthEnabled;
+    rootAuthHelp.textContent = state.sshPasswordAuthEnabled
+      ? "Resetting root's password isn't always wanted, so it stays key-only unless you opt in below."
+      : "Requires the application user's password auth above to be enabled first.";
+    rootAuthKey.setAttribute("aria-pressed", String(!state.rootPasswordAuthEnabled));
+    rootAuthPw.setAttribute("aria-pressed", String(state.rootPasswordAuthEnabled));
+    rootKeyFieldWrap.style.display = state.rootPasswordAuthEnabled ? "none" : "grid";
+    rootPwFieldWrap.style.display = state.rootPasswordAuthEnabled ? "grid" : "none";
+  }
+  userAuthKey.addEventListener("click", function () { state.sshPasswordAuthEnabled = false; updateAuthUi(); generate(); });
+  userAuthPw.addEventListener("click", function () { state.sshPasswordAuthEnabled = true; updateAuthUi(); generate(); });
+  rootAuthKey.addEventListener("click", function () { state.rootPasswordAuthEnabled = false; updateAuthUi(); generate(); });
+  rootAuthPw.addEventListener("click", function () {
+    if (rootAuthPw.disabled) return;
+    state.rootPasswordAuthEnabled = true; updateAuthUi(); generate();
+  });
+  updateAuthUi();
 
   // ---- password generator / visibility --------------------------------
   // Charset deliberately excludes ; | & $ ` ' " \ and whitespace so a
@@ -1077,8 +1190,23 @@
     out += "\n";
 
     out += line("kv", 'RESTRICTED_USERNAME="' + el.restrictedUsername.value.trim() + '"');
-    out += line("kv", 'ROOT_USER_SSH_PUBLIC_KEY="' + el.rootKey.value.trim().replace(/\s+/g, " ") + '"');
-    out += line("kv", 'RESTRICTED_USER_SSH_PUBLIC_KEY="' + el.userKey.value.trim().replace(/\s+/g, " ") + '"');
+    out += "\n";
+    out += line("kv", 'SSH_PASSWORD_AUTH_ENABLED="' + (state.sshPasswordAuthEnabled ? "yes" : "no") + '"');
+    out += line("kv", 'ROOT_PASSWORD_AUTH_ENABLED="' + (state.rootPasswordAuthEnabled ? "yes" : "no") + '"');
+    if (state.rootPasswordAuthEnabled) {
+      out += line("kv", 'ROOT_USER_PASSWORD="' + el.rootPw.value + '"');
+      out += line("cm", "# ROOT_USER_SSH_PUBLIC_KEY=\"ssh-rsa AAAA...your-public-key\"");
+    } else {
+      out += line("kv", 'ROOT_USER_SSH_PUBLIC_KEY="' + el.rootKey.value.trim().replace(/\s+/g, " ") + '"');
+      out += line("cm", "# ROOT_USER_PASSWORD=\"\"");
+    }
+    if (state.sshPasswordAuthEnabled) {
+      out += line("kv", 'RESTRICTED_USER_PASSWORD="' + el.restrictedPw.value + '"');
+      out += line("cm", "# RESTRICTED_USER_SSH_PUBLIC_KEY=\"ssh-rsa AAAA...your-public-key\"");
+    } else {
+      out += line("kv", 'RESTRICTED_USER_SSH_PUBLIC_KEY="' + el.userKey.value.trim().replace(/\s+/g, " ") + '"');
+      out += line("cm", "# RESTRICTED_USER_PASSWORD=\"\"");
+    }
     out += "\n";
 
     out += line("kv", 'PHPMYADMIN_ENABLED="' + (state.pmaEnabled ? "yes" : "no") + '"');
@@ -1117,6 +1245,7 @@
   var STATUS_ITEMS = [
     ["domain", "domain"], ["restrictedUsername", "user"], ["phpVersion", "php"],
     ["rootKey", "root key"], ["userKey", "user key"],
+    ["rootPw", "root password"], ["restrictedPw", "user password"],
     ["dbVersion", "db version"], ["dbPw", "db password"],
     ["openSearchVersion", "opensearch"], ["composerVersion", "composer"], ["varnishVersion", "varnish"],
     ["pmaUsername", "pma user"], ["pmaPw", "pma password"], ["pmaPort", "pma port"],
@@ -1130,6 +1259,10 @@
     STATUS_ITEMS.forEach(function (pair) {
       var key = pair[0], label = pair[1];
       var result = v[key];
+      if (key === "rootKey" && state.rootPasswordAuthEnabled) return;
+      if (key === "rootPw" && !state.rootPasswordAuthEnabled) return;
+      if (key === "userKey" && state.sshPasswordAuthEnabled) return;
+      if (key === "restrictedPw" && !state.sshPasswordAuthEnabled) return;
       if ((key === "dbVersion" || key === "dbPw") && !state.dbEnabled) return;
       if (key === "openSearchVersion" && !state.osEnabled) return;
       if (key === "composerVersion" && !state.composerEnabled) return;
@@ -1159,6 +1292,8 @@
     varnishVersion: ["f-varnishversion", "msg-varnishversion"],
     rootKey: ["f-rootkey", "msg-rootkey"],
     userKey: ["f-userkey", "msg-userkey"],
+    rootPw: ["f-rootpw", "msg-rootpw"],
+    restrictedPw: ["f-restrictedpw", "msg-restrictedpw"],
     dbPw: ["f-dbpw", "msg-dbpw"],
     pmaUsername: ["f-pmauser", "msg-pmauser"],
     pmaPw: ["f-pmapw", "msg-pmapw"],
@@ -1233,10 +1368,13 @@
     state.varnishEnabled = true;
     state.composerEnabled = true;
     state.pmaEnabled = true;
+    state.sshPasswordAuthEnabled = false;
+    state.rootPasswordAuthEnabled = false;
 
     updateSslUi();
     updateDbUi();
     updateDbVersionOptions();
+    updateAuthUi();
     osFields.style.display = "grid";
     varnishFields.style.display = "grid";
     composerVersionField.style.display = "";

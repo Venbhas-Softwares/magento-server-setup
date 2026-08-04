@@ -45,6 +45,7 @@ load_config_safely() {
         "RESTRICTED_USER_SSH_PUBLIC_KEY" "VALKEY_ENABLED" "VARNISH_ENABLED" "VARNISH_VERSION" "PHPMYADMIN_ENABLED"
         "PMA_USERNAME" "PMA_PASSWORD" "PMA_PORT" "PMA_PATH"
         "WEB_ROOT" "ENABLE_SSL_TERMINATION" "SSL_CERT_PATH" "SSL_KEY_PATH"
+        "SSH_PASSWORD_AUTH_ENABLED" "ROOT_PASSWORD_AUTH_ENABLED" "ROOT_USER_PASSWORD" "RESTRICTED_USER_PASSWORD"
     )
 
     while IFS= read -r line; do
@@ -98,8 +99,16 @@ validate_server_config() {
     VARNISH_ENABLED="${VARNISH_ENABLED:-yes}"
     COMPOSER_ENABLED="${COMPOSER_ENABLED:-yes}"
     PHPMYADMIN_ENABLED="${PHPMYADMIN_ENABLED:-yes}"
+    # Default "no" preserves the existing secure-by-default behavior (key-only
+    # SSH) for every config written before these switches existed. The two
+    # are independent: SSH_PASSWORD_AUTH_ENABLED governs the restricted
+    # (application) user and turns on sshd password auth at all; root's
+    # password is only ever touched if ROOT_PASSWORD_AUTH_ENABLED is also
+    # yes — resetting root's credential isn't something every run should do.
+    SSH_PASSWORD_AUTH_ENABLED="${SSH_PASSWORD_AUTH_ENABLED:-no}"
+    ROOT_PASSWORD_AUTH_ENABLED="${ROOT_PASSWORD_AUTH_ENABLED:-no}"
 
-    for toggle_var in OPENSEARCH_ENABLED DB_ENABLED VALKEY_ENABLED VARNISH_ENABLED COMPOSER_ENABLED PHPMYADMIN_ENABLED; do
+    for toggle_var in OPENSEARCH_ENABLED DB_ENABLED VALKEY_ENABLED VARNISH_ENABLED COMPOSER_ENABLED PHPMYADMIN_ENABLED SSH_PASSWORD_AUTH_ENABLED ROOT_PASSWORD_AUTH_ENABLED; do
         if [[ "${!toggle_var}" != "yes" && "${!toggle_var}" != "no" ]]; then
             echo "ERROR: Invalid ${toggle_var} '${!toggle_var}'. Must be 'yes' or 'no'"
             exit 1
@@ -107,6 +116,10 @@ validate_server_config() {
     done
     if [[ "$PHPMYADMIN_ENABLED" == "yes" && "$DB_ENABLED" == "no" ]]; then
         echo "ERROR: PHPMYADMIN_ENABLED=yes requires DB_ENABLED=yes (phpMyAdmin has no database to administer otherwise)"
+        exit 1
+    fi
+    if [[ "$ROOT_PASSWORD_AUTH_ENABLED" == "yes" && "$SSH_PASSWORD_AUTH_ENABLED" != "yes" ]]; then
+        echo "ERROR: ROOT_PASSWORD_AUTH_ENABLED=yes requires SSH_PASSWORD_AUTH_ENABLED=yes (sshd password authentication must be on server-wide before root can use one)"
         exit 1
     fi
 
@@ -122,8 +135,21 @@ validate_server_config() {
     [[ "$OPENSEARCH_ENABLED" == "yes" && -z "$OPENSEARCH_VERSION" ]] && missing+=("OPENSEARCH_VERSION")
     [[ "$VARNISH_ENABLED" == "yes" && -z "$VARNISH_VERSION" ]] && missing+=("VARNISH_VERSION")
     [[ -z "$RESTRICTED_USERNAME" ]]       && missing+=("RESTRICTED_USERNAME")
-    [[ -z "$ROOT_USER_SSH_PUBLIC_KEY" ]]        && missing+=("ROOT_USER_SSH_PUBLIC_KEY")
-    [[ -z "$RESTRICTED_USER_SSH_PUBLIC_KEY" ]] && missing+=("RESTRICTED_USER_SSH_PUBLIC_KEY")
+    # Some servers only accept key-based SSH login, others require passwords —
+    # each account picks its own credential independently (root doesn't have
+    # to switch to a password just because the restricted user does, and
+    # vice versa). Whichever credential isn't required for an account is
+    # still optional and gets deployed/set if supplied.
+    if [[ "$SSH_PASSWORD_AUTH_ENABLED" == "yes" ]]; then
+        [[ -z "$RESTRICTED_USER_PASSWORD" ]] && missing+=("RESTRICTED_USER_PASSWORD")
+    else
+        [[ -z "$RESTRICTED_USER_SSH_PUBLIC_KEY" ]] && missing+=("RESTRICTED_USER_SSH_PUBLIC_KEY")
+    fi
+    if [[ "$ROOT_PASSWORD_AUTH_ENABLED" == "yes" ]]; then
+        [[ -z "$ROOT_USER_PASSWORD" ]] && missing+=("ROOT_USER_PASSWORD")
+    else
+        [[ -z "$ROOT_USER_SSH_PUBLIC_KEY" ]] && missing+=("ROOT_USER_SSH_PUBLIC_KEY")
+    fi
     if [[ "$PHPMYADMIN_ENABLED" == "yes" ]]; then
         [[ -z "$PMA_PORT" ]]          && missing+=("PMA_PORT")
         [[ -z "$PMA_USERNAME" ]]      && missing+=("PMA_USERNAME")
@@ -180,6 +206,12 @@ validate_server_config() {
             echo "ERROR: Invalid PMA_PORT '$PMA_PORT'. Must be 1–65535"
             exit 1
         fi
+    fi
+    if [[ "$SSH_PASSWORD_AUTH_ENABLED" == "yes" ]]; then
+        [[ ${#RESTRICTED_USER_PASSWORD} -lt 12 ]] && { echo "ERROR: RESTRICTED_USER_PASSWORD must be at least 12 characters"; exit 1; }
+    fi
+    if [[ "$ROOT_PASSWORD_AUTH_ENABLED" == "yes" ]]; then
+        [[ ${#ROOT_USER_PASSWORD} -lt 12 ]] && { echo "ERROR: ROOT_USER_PASSWORD must be at least 12 characters"; exit 1; }
     fi
 }
 
@@ -286,31 +318,152 @@ validate_system_resources() {
     fi
 }
 
+# calculate_resource_allocations — single source of truth for every RAM-based
+# sizing decision, computed up front from TOTAL_RAM_GB/CPU_CORES before any
+# module installs anything. Modules php, opensearch, valkey, database, and
+# varnish consume the variables this sets rather than calculating their own;
+# this also lets validate_resource_allocations run *before* installation
+# instead of after, when aborting would be pointless.
+#
+# Sets: PHP_MEMORY_LIMIT, PHP_MAX_CHILDREN, PHP_START_SERVERS, PHP_MIN_SPARE,
+#       PHP_MAX_SPARE, MARIADB_BUFFER_POOL_MB, OPENSEARCH_HEAP, VALKEY_MEMORY,
+#       VARNISH_CACHE_MB, OS_RESERVE_MB
+# Uses: TOTAL_RAM_GB, CPU_CORES, DB_ENABLED, OPENSEARCH_ENABLED,
+#       VALKEY_ENABLED, VARNISH_ENABLED
+
+calculate_resource_allocations() {
+    local RAM_MB=$((TOTAL_RAM_GB * 1024))
+
+    # OS/overhead reserve — a flat 512MB undercounts MariaDB's non-pool
+    # overhead, OpenSearch's off-heap memory, and page cache on bigger boxes,
+    # so it scales with RAM (with 512MB as a floor for small instances).
+    OS_RESERVE_MB=$((RAM_MB * 5 / 100))
+    [ "$OS_RESERVE_MB" -lt 512 ] && OS_RESERVE_MB=512
+
+    # ── Fixed-size services first — each is fully resident once running, so
+    # none of them get a "typical usage" discount the way PHP-FPM does below.
+
+    if [[ "${DB_ENABLED:-yes}" == "yes" ]]; then
+        # 25-30% of RAM for InnoDB's pool. 50% is the rule for a *dedicated*
+        # DB server; this is a shared single-box stack with PHP-FPM,
+        # OpenSearch, Valkey, and Varnish all competing for the same RAM.
+        if [ "$TOTAL_RAM_GB" -le 8 ]; then
+            MARIADB_BUFFER_POOL_MB=$((RAM_MB * 25 / 100))
+        else
+            MARIADB_BUFFER_POOL_MB=$((RAM_MB * 30 / 100))
+        fi
+        [ "$MARIADB_BUFFER_POOL_MB" -lt 256 ] && MARIADB_BUFFER_POOL_MB=256
+    else
+        MARIADB_BUFFER_POOL_MB=0
+    fi
+
+    if [[ "${OPENSEARCH_ENABLED:-yes}" == "yes" ]]; then
+        # 25% of RAM, capped at 8GB; capped at 1GB on servers with <=6GB to
+        # leave headroom for PHP-FPM and the OS. The standalone "50% of RAM"
+        # rule (still fine for a dedicated search node) left no room for
+        # MariaDB/Valkey/Varnish/PHP-FPM once all of them were counted in the
+        # same validator — this is the shared single-box equivalent of the
+        # InnoDB pool's 50%-to-25/30% rebalance above.
+        OPENSEARCH_HEAP=$((RAM_MB * 25 / 100))
+        [ "$OPENSEARCH_HEAP" -gt 8192 ] && OPENSEARCH_HEAP=8192
+        if [ "$TOTAL_RAM_GB" -le 6 ] && [ "$OPENSEARCH_HEAP" -gt 1024 ]; then
+            OPENSEARCH_HEAP=1024
+        fi
+        [ "$OPENSEARCH_HEAP" -lt 1024 ] && OPENSEARCH_HEAP=1024
+    else
+        OPENSEARCH_HEAP=0
+    fi
+
+    if [[ "${VALKEY_ENABLED:-yes}" == "yes" ]]; then
+        # 10% of RAM, capped at 2GB, minimum 256MB.
+        VALKEY_MEMORY=$((RAM_MB / 10))
+        [ "$VALKEY_MEMORY" -gt 2048 ] && VALKEY_MEMORY=2048
+        [ "$VALKEY_MEMORY" -lt 256 ]  && VALKEY_MEMORY=256
+    else
+        VALKEY_MEMORY=0
+    fi
+
+    if [[ "${VARNISH_ENABLED:-yes}" == "yes" ]]; then
+        # 5% of RAM for the malloc cache, capped at 2GB, minimum 256MB.
+        VARNISH_CACHE_MB=$((RAM_MB * 5 / 100))
+        [ "$VARNISH_CACHE_MB" -gt 2048 ] && VARNISH_CACHE_MB=2048
+        [ "$VARNISH_CACHE_MB" -lt 256 ]  && VARNISH_CACHE_MB=256
+    else
+        VARNISH_CACHE_MB=0
+    fi
+
+    # ── PHP-FPM gets whatever's left ───────────────────────────────────────────
+    # PHP_MAX_CHILDREN is derived from the remaining memory instead of a
+    # hardcoded 20/100/150 per RAM bracket, so it adapts to whichever other
+    # services are actually enabled on this box.
+
+    if [ "$TOTAL_RAM_GB" -le 6 ]; then
+        PHP_MEMORY_LIMIT="2G"
+    elif [ "$TOTAL_RAM_GB" -le 16 ]; then
+        PHP_MEMORY_LIMIT="4G"
+    else
+        PHP_MEMORY_LIMIT="6G"
+    fi
+
+    local php_memory_mb=${PHP_MEMORY_LIMIT%G}
+    php_memory_mb=$((php_memory_mb * 1024))
+
+    local fixed_total=$((MARIADB_BUFFER_POOL_MB + OPENSEARCH_HEAP + VALKEY_MEMORY + VARNISH_CACHE_MB + OS_RESERVE_MB))
+    local remaining=$((RAM_MB - fixed_total))
+    # Always leave room for at least one child's average footprint, even on a
+    # box so small the fixed services already ate everything — the resulting
+    # overcommit is exactly what validate_resource_allocations exists to flag.
+    local avg_rss_per_child=$((php_memory_mb * 15 / 100))
+    [ "$remaining" -lt "$avg_rss_per_child" ] && remaining=$avg_rss_per_child
+
+    PHP_MAX_CHILDREN=$((remaining / avg_rss_per_child))
+    [ "$PHP_MAX_CHILDREN" -lt 5 ] && PHP_MAX_CHILDREN=5
+
+    PHP_START_SERVERS=$((CPU_CORES * 2))
+    PHP_MIN_SPARE=$((CPU_CORES))
+    PHP_MAX_SPARE=$((CPU_CORES * 4))
+
+    [ "$PHP_START_SERVERS" -lt 5 ]  && PHP_START_SERVERS=5
+    [ "$PHP_MIN_SPARE" -lt 3 ]      && PHP_MIN_SPARE=3
+    [ "$PHP_MAX_SPARE" -lt 10 ]     && PHP_MAX_SPARE=10
+
+    # Enforce PHP-FPM constraint: min_spare <= start_servers <= max_spare <= max_children
+    [ "$PHP_MAX_SPARE" -ge "$PHP_MAX_CHILDREN" ] && PHP_MAX_SPARE=$((PHP_MAX_CHILDREN - 1))
+    [ "$PHP_MAX_SPARE" -lt 1 ]                   && PHP_MAX_SPARE=1
+    [ "$PHP_START_SERVERS" -gt "$PHP_MAX_SPARE" ] && PHP_START_SERVERS=$PHP_MAX_SPARE
+    [ "$PHP_MIN_SPARE" -gt "$PHP_START_SERVERS" ] && PHP_MIN_SPARE=$PHP_START_SERVERS
+
+    print_message "Resource tiers: PHP ${PHP_MEMORY_LIMIT} × ${PHP_MAX_CHILDREN} children, MariaDB ${MARIADB_BUFFER_POOL_MB}MB, OpenSearch ${OPENSEARCH_HEAP}MB, Valkey ${VALKEY_MEMORY}MB, Varnish ${VARNISH_CACHE_MB}MB, OS reserve ${OS_RESERVE_MB}MB"
+}
+
 validate_resource_allocations() {
     local PHP_MEMORY_MB=${PHP_MEMORY_LIMIT%G}
     PHP_MEMORY_MB=$((PHP_MEMORY_MB * 1024))
     local PHP_FPM_MAX_MEMORY=$((PHP_MAX_CHILDREN * PHP_MEMORY_MB * 15 / 100))
-    local TOTAL_ALLOCATED=$((PHP_FPM_MAX_MEMORY + OPENSEARCH_HEAP + VALKEY_MEMORY))
+    local TOTAL_ALLOCATED=$((PHP_FPM_MAX_MEMORY + OPENSEARCH_HEAP + VALKEY_MEMORY + MARIADB_BUFFER_POOL_MB + VARNISH_CACHE_MB))
     local SYSTEM_RAM_MB=$((TOTAL_RAM_GB * 1024))
-    local AVAILABLE=$((SYSTEM_RAM_MB - 512))
+    local AVAILABLE=$((SYSTEM_RAM_MB - OS_RESERVE_MB))
 
     print_message "Resource Allocation Summary:"
-    echo "  System RAM:        ${TOTAL_RAM_GB}GB (${SYSTEM_RAM_MB}MB)"
-    echo "  PHP-FPM:           ~${PHP_FPM_MAX_MEMORY}MB (${PHP_MAX_CHILDREN} children × ${PHP_MEMORY_MB}MB × 15% avg RSS)"
-    echo "  OpenSearch heap:   ${OPENSEARCH_HEAP}MB"
-    echo "  Valkey:            ${VALKEY_MEMORY}MB"
-    echo "  Total allocated:   ~${TOTAL_ALLOCATED}MB"
-    echo "  Available:         ${AVAILABLE}MB"
+    echo "  System RAM:          ${TOTAL_RAM_GB}GB (${SYSTEM_RAM_MB}MB)"
+    echo "  OS/overhead reserve: ${OS_RESERVE_MB}MB"
+    echo "  PHP-FPM:             ~${PHP_FPM_MAX_MEMORY}MB (${PHP_MAX_CHILDREN} children × ${PHP_MEMORY_MB}MB × 15% avg RSS)"
+    echo "  MariaDB/MySQL pool:  ${MARIADB_BUFFER_POOL_MB}MB"
+    echo "  OpenSearch heap:     ${OPENSEARCH_HEAP}MB"
+    echo "  Valkey:              ${VALKEY_MEMORY}MB"
+    echo "  Varnish cache:       ${VARNISH_CACHE_MB}MB"
+    echo "  Total allocated:     ~${TOTAL_ALLOCATED}MB"
+    echo "  Available:           ${AVAILABLE}MB"
     echo ""
 
     local warnings=() errors=()
     [ "$PHP_MEMORY_MB" -gt $((TOTAL_RAM_GB * 1024 / 2)) ] && warnings+=("PHP memory limit > 50% of total RAM")
-    [ $PHP_MAX_CHILDREN -gt 200 ]                          && warnings+=("PHP-FPM max_children (${PHP_MAX_CHILDREN}) is very high")
-    [ $OPENSEARCH_HEAP -gt $((TOTAL_RAM_GB * 1024 / 2)) ] && warnings+=("OpenSearch heap > 50% of total RAM")
-    [ $OPENSEARCH_HEAP -lt 1024 ]                          && warnings+=("OpenSearch heap (${OPENSEARCH_HEAP}MB) < 1GB — search performance may be poor")
-    [ $VALKEY_MEMORY -lt 256 ]                             && warnings+=("Valkey memory (${VALKEY_MEMORY}MB) is very low")
-    [ $TOTAL_ALLOCATED -gt $((AVAILABLE * 80 / 100)) ]    && warnings+=("Resource allocation uses >80% of available memory")
-    [ $TOTAL_ALLOCATED -gt $AVAILABLE ]                    && errors+=("Total allocation (${TOTAL_ALLOCATED}MB) EXCEEDS available memory by $((TOTAL_ALLOCATED - AVAILABLE))MB")
+    [ "$PHP_MAX_CHILDREN" -gt 200 ]                        && warnings+=("PHP-FPM max_children (${PHP_MAX_CHILDREN}) is very high")
+    [ "$OPENSEARCH_HEAP" -gt $((TOTAL_RAM_GB * 1024 / 2)) ] && warnings+=("OpenSearch heap > 50% of total RAM")
+    [ "$OPENSEARCH_HEAP" -gt 0 ] && [ "$OPENSEARCH_HEAP" -lt 1024 ] && warnings+=("OpenSearch heap (${OPENSEARCH_HEAP}MB) < 1GB — search performance may be poor")
+    [ "$VALKEY_MEMORY" -gt 0 ] && [ "$VALKEY_MEMORY" -lt 256 ]      && warnings+=("Valkey memory (${VALKEY_MEMORY}MB) is very low")
+    [ "$TOTAL_ALLOCATED" -gt $((AVAILABLE * 80 / 100)) ]   && warnings+=("Resource allocation uses >80% of available memory")
+    [ "$TOTAL_ALLOCATED" -gt "$AVAILABLE" ]                && errors+=("Total allocation (${TOTAL_ALLOCATED}MB) EXCEEDS available memory by $((TOTAL_ALLOCATED - AVAILABLE))MB")
 
     if [[ ${#warnings[@]} -gt 0 ]]; then
         print_warning "RESOURCE ALLOCATION WARNINGS:"
@@ -324,6 +477,52 @@ validate_resource_allocations() {
         print_error "Installation cannot proceed due to insufficient memory"
         exit 1
     fi
+}
+
+# ── Safe authorized_keys writer ───────────────────────────────────────────────
+# write_authorized_key_safely <target_file> <configured_key> <owner_label> <config_var_name>
+#
+# Used by modules security (root) and system (restricted user) instead of a
+# blind `echo ... > authorized_keys`, which would silently destroy a
+# cloud-init-provisioned key. Combined with password auth being disabled
+# (module: security), overwriting the wrong key is a permanent lockout — so
+# any pre-existing key that doesn't match what's configured is a hard stop,
+# not a silent overwrite.
+
+write_authorized_key_safely() {
+    local target_file="$1"
+    local configured_key="$2"
+    local owner_label="$3"
+    local config_var_name="$4"
+
+    if [[ ! -s "$target_file" ]]; then
+        echo "$configured_key" > "$target_file"
+        return 0
+    fi
+
+    local existing
+    existing="$(cat "$target_file")"
+
+    if [[ "$existing" == "$configured_key" ]]; then
+        print_message "authorized_keys for ${owner_label} already contains the configured key — leaving it untouched."
+        return 0
+    fi
+
+    print_error "Refusing to overwrite existing SSH key(s) for ${owner_label} — this looks like a pre-existing key"
+    print_error "(e.g. provisioned by your cloud provider's cloud-init) that doesn't match ${config_var_name}."
+    print_error ""
+    print_error "  File:                ${target_file}"
+    print_error "  Currently contains:"
+    while IFS= read -r existing_line; do
+        [[ -n "$existing_line" ]] && print_error "    ${existing_line}"
+    done <<< "$existing"
+    print_error "  Configured key (${config_var_name}):"
+    print_error "    ${configured_key}"
+    print_error ""
+    print_error "To resolve, either:"
+    print_error "  1. Update ${config_var_name} in server-setup.conf to match the key already on the server, then re-run; or"
+    print_error "  2. If you intend to replace it, back up/clear ${target_file} yourself first, then re-run."
+    exit 1
 }
 
 # ── Module resolution ─────────────────────────────────────────────────────────

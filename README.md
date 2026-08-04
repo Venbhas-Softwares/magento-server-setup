@@ -140,8 +140,12 @@ Copy `server-setup.conf.example` to `server-setup.conf` and fill in all values.
 | `COMPOSER_VERSION` | `2` | Composer major version: `1` or `2` (required if `COMPOSER_ENABLED=yes`) |
 | `PHPMYADMIN_ENABLED` | `yes` | `yes`/`no` — requires `DB_ENABLED=yes` |
 | `RESTRICTED_USERNAME` | `webuser` | Linux username for the application user |
-| `ROOT_USER_SSH_PUBLIC_KEY` | `ssh-ed25519 AAAA…` | Your full SSH public key for root login (key-based auth only) |
-| `RESTRICTED_USER_SSH_PUBLIC_KEY` | `ssh-ed25519 AAAA…` | SSH public key for the restricted user's login (key-based auth only) |
+| `SSH_PASSWORD_AUTH_ENABLED` | `no` | `yes`/`no` — the restricted (application) user's auth method, and whether sshd password authentication is on server-wide (required for either account to use a password). `no` (default): the restricted user is key-only, `RESTRICTED_USER_SSH_PUBLIC_KEY` required. `yes`: the restricted user logs in with a password instead, `RESTRICTED_USER_PASSWORD` required |
+| `ROOT_PASSWORD_AUTH_ENABLED` | `no` | `yes`/`no` — root specifically, independent of the restricted user's setting above. Requires `SSH_PASSWORD_AUTH_ENABLED=yes`. `no` (default): root stays key-only, `ROOT_USER_SSH_PUBLIC_KEY` required — this script never resets root's password unless you opt in here. `yes`: `ROOT_USER_PASSWORD` required |
+| `ROOT_USER_SSH_PUBLIC_KEY` | `ssh-ed25519 AAAA…` | Your full SSH public key for root login (required unless `ROOT_PASSWORD_AUTH_ENABLED=yes`) |
+| `RESTRICTED_USER_SSH_PUBLIC_KEY` | `ssh-ed25519 AAAA…` | SSH public key for the restricted user's login (required unless `SSH_PASSWORD_AUTH_ENABLED=yes`) |
+| `ROOT_USER_PASSWORD` | *(optional)* | Root account password, min 12 characters (required if `ROOT_PASSWORD_AUTH_ENABLED=yes`) |
+| `RESTRICTED_USER_PASSWORD` | *(optional)* | Restricted user account password, min 12 characters (required if `SSH_PASSWORD_AUTH_ENABLED=yes`) |
 | `PMA_PORT` | `61098` | Non-standard port for phpMyAdmin (1–65535, required if `PHPMYADMIN_ENABLED=yes`) |
 | `PMA_USERNAME` | `pma_admin` | phpMyAdmin login username (required if `PHPMYADMIN_ENABLED=yes`) |
 | `PMA_PASSWORD` | — | Strong password for phpMyAdmin (required if `PHPMYADMIN_ENABLED=yes`) |
@@ -172,15 +176,15 @@ The script appends these to `server-setup.conf` automatically after running:
 | # | Module | What it does |
 |---|---|---|
 | 1 | `system.sh` | System update, essential packages, restricted user, web root |
-| 2 | `nginx.sh` | Nginx installation and base configuration |
+| 2 | `nginx.sh` | Nginx installation; when `VARNISH_ENABLED=yes`, also moves the default site to port 8080 immediately after install (before anything else can bind :80) |
 | 3 | `php.sh` | PHP-FPM installation, `php.ini`, and pool configuration |
 | 4 | `database.sh` | Database installation (MariaDB or MySQL, per `DB_ENGINE`), hardening, and tuned `my.cnf` — skipped when `DB_ENABLED=no` |
 | 5 | `opensearch.sh` | OpenSearch installation and JVM heap configuration — skipped when `OPENSEARCH_ENABLED=no` |
 | 6 | `valkey.sh` | Valkey (Redis-compatible) installation and memory limits — skipped when `VALKEY_ENABLED=no` |
-| 7 | `varnish.sh` | Varnish Cache installation (version-pinned via the official packagecloud repo), VCL configuration, and systemd unit — skipped when `VARNISH_ENABLED=no` |
+| 7 | `varnish.sh` | Varnish Cache installation (version-pinned via the official packagecloud repo) and a systemd drop-in (listen address, cache size); no VCL is written — skipped when `VARNISH_ENABLED=no` |
 | 8 | `composer.sh` | Composer installation (version 1 or 2) — skipped when `COMPOSER_ENABLED=no` |
 | 9 | `phpmyadmin.sh` | phpMyAdmin secured with HTTP Basic Auth, random port, and random URL path — skipped when `PHPMYADMIN_ENABLED=no` |
-| 10 | `security.sh` | UFW firewall rules, SSH hardening (key-only, password auth disabled), Git deploy key for the restricted user |
+| 10 | `security.sh` | UFW firewall rules (allow rules queued before `ufw enable`), SSH hardening via an authoritative drop-in verified with `sshd -T` before restart, Git deploy key for the restricted user |
 | 11 | `ssl-termination.sh` | Nginx SSL termination on :443 (self-signed or operator-supplied cert, proxies to port 80) — optional, skipped when `ENABLE_SSL_TERMINATION=no` |
 | 12 | `vhost.sh` | Placeholder Nginx virtual host for the web root — binds port 80 directly when Varnish is disabled, otherwise 8080 |
 | 13 | `finalize.sh` | Nginx test/restart, config persistence, `server_setup_info.txt` summary |
@@ -194,11 +198,11 @@ Service allocations are calculated dynamically from detected hardware at runtime
 | Service | Sizing rule |
 |---|---|
 | PHP memory limit | 2 GB minimum, scales to 6 GB+ on systems with 16 GB+ RAM |
-| PHP-FPM workers | 20–150 children based on RAM; start/spare counts based on CPU cores |
-| Database `innodb_buffer_pool_size` (MariaDB or MySQL) | 50% of system RAM |
-| OpenSearch heap (`-Xms` / `-Xmx`), if enabled | 50% of RAM, capped at 8 GB |
-| Valkey `maxmemory`, if enabled | 10% of RAM, capped at 2 GB |
-| Varnish cache, if enabled | 256 MB (fixed) |
+| PHP-FPM workers | `max_children` derived from whatever RAM remains after the fixed-size services above, floored at 5; start/spare counts based on CPU cores |
+| Database `innodb_buffer_pool_size` (MariaDB or MySQL) | 25% of RAM (≤8 GB systems) or 30% (>8 GB) — not the 50% dedicated-DB-server rule, since this is a shared single-box stack |
+| OpenSearch heap (`-Xms` / `-Xmx`), if enabled | 25% of RAM, capped at 8 GB (1 GB cap on ≤6 GB systems) |
+| Valkey `maxmemory`, if enabled | 10% of RAM, capped at 2 GB, minimum 256 MB |
+| Varnish cache, if enabled | 5% of RAM, capped at 2 GB, minimum 256 MB |
 
 > [!NOTE]
 > The setup script validates total allocations before proceeding and will warn or abort if they would exceed available memory.
@@ -207,11 +211,11 @@ Service allocations are calculated dynamically from detected hardware at runtime
 
 ## Security Model
 
-- **SSH**: Password authentication is disabled. Only key-based login is permitted. The key from `ROOT_USER_SSH_PUBLIC_KEY` is deployed to `root`'s `authorized_keys`.
-- **Restricted user**: The application user has no `sudo` rights but does have direct, key-based SSH login (the key from `RESTRICTED_USER_SSH_PUBLIC_KEY` is deployed to its `authorized_keys`) — a full but unprivileged shell. It's also reachable via `su - <RESTRICTED_USERNAME>` from a root session. A separate Git deploy key is generated for it so you can pull a private repo when deploying manually.
+- **SSH**: Root and the restricted (application) user each pick key-only or password-only login independently via `ROOT_PASSWORD_AUTH_ENABLED` and `SSH_PASSWORD_AUTH_ENABLED` (both default `no`) — enabling one doesn't force the other to switch, and resetting root's password specifically is opt-in (`ROOT_PASSWORD_AUTH_ENABLED=yes` requires `SSH_PASSWORD_AUTH_ENABLED=yes`, since sshd's `PasswordAuthentication` is a single server-wide switch; `PermitRootLogin` is what actually gates root once that's on). By default both are key-only: `PasswordAuthentication no` and `PermitRootLogin prohibit-password`, written to an authoritative drop-in (`/etc/ssh/sshd_config.d/40-hardening.conf`, sorted to win over any distro/cloud-init drop-in like `50-cloud-init.conf`). The effective config is verified with `sshd -T` before sshd restarts — the module hard-fails rather than proceeding on an unverified claim. When a key is used, it's deployed to `authorized_keys` — if a different key already exists there (e.g. from cloud-init), the write is refused rather than silently overwritten, since combined with password auth being disabled that would be a permanent lockout.
+- **Restricted user**: The application user has no `sudo` rights but does have direct SSH login — key-based via `RESTRICTED_USER_SSH_PUBLIC_KEY`, or password-based via `RESTRICTED_USER_PASSWORD` when `SSH_PASSWORD_AUTH_ENABLED=yes` — a full but unprivileged shell either way. It's also reachable via `su - <RESTRICTED_USERNAME>` from a root session. A separate Git deploy key is generated for it so you can pull a private repo when deploying manually.
 - **phpMyAdmin**: When enabled, served on a non-standard port behind HTTP Basic Authentication with a randomly generated URL path.
 - **Service binding**: The database, OpenSearch, and Valkey (whichever are enabled) all bind to `127.0.0.1` only. MySQL 5.6/5.7's Docker container publishes to `127.0.0.1:3306` specifically (not `0.0.0.0`) for the same reason — Docker manages its own iptables/nftables rules and a wider publish can bypass UFW entirely, so the loopback-only bind is what actually keeps it unreachable from outside the host.
-- **Varnish/Nginx**: When Varnish is enabled it owns port 80; Nginx listens on port 8080 and is not directly exposed. Varnish forwards the real client IP via `X-Forwarded-For` through to PHP-FPM, so the application's maintenance-mode IP allowlists and request logs see the actual visitor IP rather than Varnish's own address. When Varnish is disabled, Nginx binds port 80 directly.
+- **Varnish/Nginx**: When Varnish is enabled it owns port 80; Nginx listens on port 8080 and is not directly exposed. No VCL is written by this repo — the package default forwards the real client IP via `X-Forwarded-For` through to PHP-FPM automatically, so the application's maintenance-mode IP allowlists and request logs see the actual visitor IP rather than Varnish's own address. When Varnish is disabled, Nginx binds port 80 directly.
 - **Firewall (UFW)**: Only port 80, the phpMyAdmin port, and — when `ENABLE_SSL_TERMINATION=yes` — port 443 are open externally.
 - **Nginx headers**: `X-Frame-Options`, `X-XSS-Protection`, `X-Content-Type-Options`, `Referrer-Policy` are set on all responses.
 - **Config file loader**: `lib/functions.sh` uses a strict allowlist-based parser that rejects unknown variables and blocks shell injection patterns in `server-setup.conf`.
@@ -245,7 +249,7 @@ This repo stops at server provisioning. It doesn't assume Magento — the same s
 
 1. `su - <RESTRICTED_USERNAME>` and deploy your application into `${WEB_ROOT}` (`/var/www/<DOMAIN_NAME>`) however you normally do — Composer install, the framework's setup command, database import, etc. The restricted user's public Git deploy key (printed at the end of the run, and saved in `server_setup_info.txt`) can be added to your repository host for a private `git clone`.
 2. If your application ships its own Nginx rules (Magento does; most others don't), add `include ${WEB_ROOT}/nginx.conf;` to the server block in `/etc/nginx/sites-available/<DOMAIN_NAME>` once that file exists, then `nginx -t && systemctl reload nginx`.
-3. If Varnish is enabled, configure it as the caching backend in your application's admin (if it has one), export its VCL, and review it against `/etc/varnish/default.vcl` — the default VCL's cache-bypass rules are written for Magento's URL/cookie conventions and will likely need adjusting for other frameworks.
+3. If Varnish is enabled, it's running with Ubuntu's package-default VCL (no Full Page Cache — it passes anything with cookies) until you install your application's own VCL: configure Varnish as the caching backend in your application's admin (if it has one), export its VCL, and replace `/etc/varnish/default.vcl` with it, then `systemctl reload varnish`.
 4. If using the auto-generated self-signed certificate, replace it at `/etc/nginx/ssl/` with a real one (e.g. a Cloudflare Origin Certificate or Let's Encrypt) for production use — or set `SSL_CERT_PATH`/`SSL_KEY_PATH` in the config and re-run `sudo bash setup-ubuntu24.sh --modules=ssl-termination`.
 
 ---
@@ -297,7 +301,7 @@ magento-server-setup/
 - **Local services only** — all backend services bind to `127.0.0.1`; modify the relevant module if a distributed setup is needed.
 - **No automated backups** — implement an external backup strategy before going to production.
 - **No application deployment** — installing/deploying the application itself is intentionally out of scope; bring your own process.
-- **Varnish's default VCL is Magento-flavored** — its cache-bypass rules (URL patterns, cookie names) match Magento's conventions. Review and adjust `/etc/varnish/default.vcl` for other frameworks.
+- **Varnish has no Full Page Cache until the app is deployed** — this repo installs Varnish but writes no VCL, so Ubuntu's package default (conservative — passes anything with cookies) is what's running. Install the application's own VCL post-deploy to get real FPC behavior; see [Deploying Your Application](#deploying-your-application).
 - **Valkey has no version selector** — unlike PHP/the database/OpenSearch/Varnish, Valkey has no official apt repo with version selection (checked directly against Valkey's own packaging discussion); the only way to pin an exact version would be compiling from source, which this repo doesn't do. `valkey.sh` installs whatever version Ubuntu's own default repo ships (currently 7.2.x on 24.04).
 
 ---

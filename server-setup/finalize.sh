@@ -5,6 +5,53 @@ nginx -t
 systemctl restart nginx
 systemctl enable  nginx
 
+# ── Verify SSH auth status directly, rather than assuming module security
+# succeeded — this module can also run standalone (--modules=finalize) in a
+# run that never sourced security, so re-check the live sshd config here
+# instead of trusting variables that may not exist in this process. Root and
+# the restricted user are reported separately since ROOT_PASSWORD_AUTH_ENABLED
+# and SSH_PASSWORD_AUTH_ENABLED are independent switches — PasswordAuthentication
+# governs the restricted user (and sshd password auth as a whole), while
+# PermitRootLogin is what actually gates root specifically.
+SSHD_PASSWORD_AUTH_ACTUAL=$(sshd -T 2>/dev/null | awk 'tolower($1)=="passwordauthentication"{print tolower($2)}')
+SSHD_ROOT_LOGIN_ACTUAL=$(sshd -T 2>/dev/null | awk 'tolower($1)=="permitrootlogin"{print tolower($2)}')
+
+if [[ "$SSHD_PASSWORD_AUTH_ACTUAL" == "no" ]]; then
+    SSH_PASSWORD_AUTH_LINE="DISABLED (verified via 'sshd -T')"
+    SSH_PASSWORD_AUTH_NOTE="Password authentication is DISABLED server-wide — verified via 'sshd -T'"
+    RESTRICTED_AUTH_LINE="SSH Access: Enabled (key-based authentication only, via RESTRICTED_USER_SSH_PUBLIC_KEY)"
+    RESTRICTED_LOGIN_CMD="  ssh ${RESTRICTED_USERNAME}@YOUR_SERVER_IP -i /path/to/your/private/key"
+    RESTRICTED_LOGIN_NOTE="ALLOWED via SSH key authentication only (full shell, no sudo)"
+elif [[ "$SSHD_PASSWORD_AUTH_ACTUAL" == "yes" ]]; then
+    SSH_PASSWORD_AUTH_LINE="ENABLED (verified via 'sshd -T') — SSH_PASSWORD_AUTH_ENABLED=yes"
+    SSH_PASSWORD_AUTH_NOTE="Password authentication is ENABLED server-wide — verified via 'sshd -T'. Make sure RESTRICTED_USER_PASSWORD is strong."
+    _ru_key_note=""; [[ -n "$RESTRICTED_USER_SSH_PUBLIC_KEY" ]] && _ru_key_note=" (SSH key also configured)"
+    RESTRICTED_AUTH_LINE="SSH Access: Password authentication enabled${_ru_key_note}"
+    RESTRICTED_LOGIN_CMD="  ssh ${RESTRICTED_USERNAME}@YOUR_SERVER_IP   (password authentication — you will be prompted)"
+    RESTRICTED_LOGIN_NOTE="ALLOWED via password authentication${_ru_key_note} (full shell, no sudo)"
+else
+    SSH_PASSWORD_AUTH_LINE="NOT confirmed (sshd -T reports: ${SSHD_PASSWORD_AUTH_ACTUAL:-unknown}) — run module 'security' or check /etc/ssh/sshd_config.d/"
+    SSH_PASSWORD_AUTH_NOTE="Password authentication status UNVERIFIED — 'sshd -T' does not report a clear status; check /etc/ssh/sshd_config.d/"
+    RESTRICTED_AUTH_LINE="SSH Access: Status unverified — run module 'security'"
+    RESTRICTED_LOGIN_CMD="  ssh ${RESTRICTED_USERNAME}@YOUR_SERVER_IP -i /path/to/your/private/key"
+    RESTRICTED_LOGIN_NOTE="UNVERIFIED — run module 'security'"
+fi
+
+if [[ "$SSHD_ROOT_LOGIN_ACTUAL" == "prohibit-password" || "$SSHD_ROOT_LOGIN_ACTUAL" == "without-password" ]]; then
+    ROOT_AUTH_LINE="SSH Key: Configured (key-based authentication only)"
+    ROOT_LOGIN_CMD="  ssh root@YOUR_SERVER_IP -i /path/to/your/private/key"
+    ROOT_LOGIN_NOTE="ALLOWED via SSH key authentication only"
+elif [[ "$SSHD_ROOT_LOGIN_ACTUAL" == "yes" ]]; then
+    _root_key_note=""; [[ -n "$ROOT_USER_SSH_PUBLIC_KEY" ]] && _root_key_note=" (SSH key also configured)"
+    ROOT_AUTH_LINE="SSH: Password authentication enabled${_root_key_note} — ROOT_PASSWORD_AUTH_ENABLED=yes"
+    ROOT_LOGIN_CMD="  ssh root@YOUR_SERVER_IP   (password authentication — you will be prompted)"
+    ROOT_LOGIN_NOTE="ALLOWED via password authentication${_root_key_note}"
+else
+    ROOT_AUTH_LINE="SSH: Status unverified — run module 'security'"
+    ROOT_LOGIN_CMD="  ssh root@YOUR_SERVER_IP -i /path/to/your/private/key"
+    ROOT_LOGIN_NOTE="UNVERIFIED — run module 'security'"
+fi
+
 # Persist generated values back to the config file for reference
 print_step "Saving generated values to configuration file..."
 {
@@ -152,15 +199,17 @@ Web Root: $WEB_ROOT
 Restricted User (Application User):
 - Username: $RESTRICTED_USERNAME
 - Home Directory: /home/${RESTRICTED_USERNAME}
-- SSH Access: Enabled (key-based authentication only, via RESTRICTED_USER_SSH_PUBLIC_KEY)
-- Access Method: ssh ${RESTRICTED_USERNAME}@YOUR_SERVER_IP -i /path/to/your/private/key (or su - ${RESTRICTED_USERNAME} from root)
+- ${RESTRICTED_AUTH_LINE}
+- Access Method:
+${RESTRICTED_LOGIN_CMD}
+  (or su - ${RESTRICTED_USERNAME} from root)
 - Permissions: NO sudo access (truly restricted for application use only)
 - Purpose: Running the application and managing application files
 - Git Deploy Key (public): ${RESTRICTED_USER_SSH_PUBKEY}
 
 Root User (Administrative Access):
-- SSH Key: Configured (key-based authentication only)
-- Password Authentication: DISABLED
+- ${ROOT_AUTH_LINE}
+- Server-wide SSH Password Authentication: ${SSH_PASSWORD_AUTH_LINE}
 - Purpose: Administrative server management tasks
 
 Software Versions:
@@ -221,7 +270,7 @@ Next Steps:
 2. Deploy your application (Magento, WordPress, Drupal, or any PHP app) to ${WEB_ROOT}
    as the restricted user, then add any application-specific Nginx include it needs to
    the vhost and reload Nginx:
-   ssh root@YOUR_SERVER_IP -i /path/to/your/private/key
+${ROOT_LOGIN_CMD}
    su - ${RESTRICTED_USERNAME}
 3. After deployment, if Varnish is enabled:
    a. Configure Varnish as the caching backend in your application, if it supports one
@@ -230,9 +279,9 @@ Next Steps:
 4. If phpMyAdmin is enabled, access it at the URL above.
 
 Security Notes:
-- Password authentication is COMPLETELY DISABLED (SSH key only)
-- Root SSH login: ALLOWED via SSH key authentication only
-- Restricted user SSH login: ALLOWED via SSH key authentication only (full shell, no sudo)
+- ${SSH_PASSWORD_AUTH_NOTE}
+- Root SSH login: ${ROOT_LOGIN_NOTE}
+- Restricted user SSH login: ${RESTRICTED_LOGIN_NOTE}
 - Restricted user has ZERO sudo access (true privilege separation)
 - phpMyAdmin, when enabled, is on a non-standard port with randomised URL path
 - All sensitive services are bound to localhost only
@@ -242,11 +291,11 @@ Security Notes:
 - Keep this file secure and delete after noting information
 
 Login Instructions:
-- Root/Admin Access (use your SSH private key):
-  ssh root@YOUR_SERVER_IP -i /path/to/your/private/key
+- Root/Admin Access:
+${ROOT_LOGIN_CMD}
 
 - Application User Access (direct SSH, or switch from root):
-  ssh ${RESTRICTED_USERNAME}@YOUR_SERVER_IP -i /path/to/your/private/key
+${RESTRICTED_LOGIN_CMD}
   su - ${RESTRICTED_USERNAME}
 
 ============================================================================
@@ -265,8 +314,14 @@ print_message "Setup information saved to: $INFO_FILE"
 print_message "Please save this information securely and delete the file when done."
 echo ""
 print_warning "IMPORTANT SECURITY CONFIGURATION:"
-print_warning "✓ Password authentication is DISABLED for all users"
-print_warning "✓ Root login is ONLY allowed via SSH key (from config)"
-print_warning "✓ Restricted user SSH login is ONLY allowed via SSH key (from config)"
+if [[ "$SSHD_PASSWORD_AUTH_ACTUAL" == "no" ]]; then
+    print_warning "✓ Password authentication is DISABLED server-wide (verified via sshd -T)"
+elif [[ "$SSHD_PASSWORD_AUTH_ACTUAL" == "yes" ]]; then
+    print_warning "! Password authentication is ENABLED server-wide (SSH_PASSWORD_AUTH_ENABLED=yes, verified via sshd -T)"
+else
+    print_warning "✗ Password authentication NOT confirmed — check /etc/ssh/sshd_config.d/"
+fi
+print_warning "  Root login: ${ROOT_LOGIN_NOTE}"
+print_warning "  Restricted user login: ${RESTRICTED_LOGIN_NOTE}"
 print_warning "✓ Restricted user has ZERO sudo access (true privilege separation)"
 echo ""

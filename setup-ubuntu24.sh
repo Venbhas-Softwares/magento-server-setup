@@ -77,19 +77,26 @@ validate_server_config
 print_step "Validating SSL/TLS configuration..."
 validate_ssl_config
 
-print_step "Validating SSH public key format..."
-if ! SSH_KEY_VALIDATION=$(validate_ssh_public_key "$ROOT_USER_SSH_PUBLIC_KEY"); then
-    print_error "$SSH_KEY_VALIDATION"
-    exit 1
+# SSH keys are only mandatory in key-only mode (validate_server_config already
+# enforced that); in password mode they're optional extras, still validated
+# for format if supplied.
+if [[ -n "$ROOT_USER_SSH_PUBLIC_KEY" ]]; then
+    print_step "Validating SSH public key format..."
+    if ! SSH_KEY_VALIDATION=$(validate_ssh_public_key "$ROOT_USER_SSH_PUBLIC_KEY"); then
+        print_error "$SSH_KEY_VALIDATION"
+        exit 1
+    fi
+    print_message "SSH public key validation passed"
 fi
-print_message "SSH public key validation passed"
 
-print_step "Validating restricted user SSH public key format..."
-if ! RESTRICTED_USER_SSH_KEY_VALIDATION=$(validate_ssh_public_key "$RESTRICTED_USER_SSH_PUBLIC_KEY"); then
-    print_error "$RESTRICTED_USER_SSH_KEY_VALIDATION"
-    exit 1
+if [[ -n "$RESTRICTED_USER_SSH_PUBLIC_KEY" ]]; then
+    print_step "Validating restricted user SSH public key format..."
+    if ! RESTRICTED_USER_SSH_KEY_VALIDATION=$(validate_ssh_public_key "$RESTRICTED_USER_SSH_PUBLIC_KEY"); then
+        print_error "$RESTRICTED_USER_SSH_KEY_VALIDATION"
+        exit 1
+    fi
+    print_message "Restricted user SSH public key validation passed"
 fi
-print_message "Restricted user SSH public key validation passed"
 
 # ── System resource detection ─────────────────────────────────────────────────
 
@@ -111,6 +118,13 @@ CPU_CORES=$(nproc)
 print_message "Detected CPU cores: ${CPU_CORES}"
 
 validate_system_resources
+
+# Compute every RAM-based sizing decision up front, then validate the result
+# BEFORE any module installs anything — validating after modules 03/05/06 (the
+# previous approach) meant aborting only after the overcommitted stack was
+# already installed and running, which defeats the point of the check.
+calculate_resource_allocations
+validate_resource_allocations
 
 
 # ── Installation summary ──────────────────────────────────────────────────────
@@ -141,6 +155,8 @@ else
     echo "Composer:           disabled"
 fi
 echo "Restricted User:    $RESTRICTED_USERNAME"
+echo "Restricted SSH:     $([ "$SSH_PASSWORD_AUTH_ENABLED" == "yes" ] && echo "password" || echo "key")"
+echo "Root SSH:           $([ "$ROOT_PASSWORD_AUTH_ENABLED" == "yes" ] && echo "password" || echo "key")"
 echo "SSL Termination:    $ENABLE_SSL_TERMINATION"
 if [[ "$PHPMYADMIN_ENABLED" == "yes" ]]; then
     echo "phpMyAdmin Port:    $PMA_PORT"

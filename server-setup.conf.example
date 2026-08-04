@@ -45,8 +45,35 @@ COMPOSER_VERSION="2"                     # Required if COMPOSER_ENABLED=yes: "1"
 PHPMYADMIN_ENABLED="yes"                 # "yes" or "no" — requires DB_ENABLED=yes
 
 RESTRICTED_USERNAME="webuser"                # Required: Linux username for the application user
-ROOT_USER_SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"    # Required: full SSH public key for root login
-RESTRICTED_USER_SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"  # Required: full SSH public key for restricted user login
+
+# ── SSH access for root and the restricted user ───────────────────────────
+# Root and the restricted (application) user each pick key or password
+# independently — enabling passwords for one doesn't force the other to
+# switch, and resetting root's password specifically is opt-in since it
+# isn't always wanted (e.g. a cloud provider may already manage it).
+#
+# SSH_PASSWORD_AUTH_ENABLED: "yes" or "no" (default "no") — the restricted
+# (application) user, and whether sshd's PasswordAuthentication is turned on
+# at all (required server-wide for either account to use a password).
+# - "no" (default, most secure): the restricted user is key-only —
+#   RESTRICTED_USER_SSH_PUBLIC_KEY is required.
+# - "yes": the restricted user logs in with a password instead of a key —
+#   RESTRICTED_USER_PASSWORD (min 12 characters) is required.
+SSH_PASSWORD_AUTH_ENABLED="no"
+
+# ROOT_PASSWORD_AUTH_ENABLED: "yes" or "no" (default "no") — root specifically.
+# Requires SSH_PASSWORD_AUTH_ENABLED="yes" (sshd password auth must already be
+# on server-wide). Left "no", root keeps key-only login even when the
+# restricted user above is using a password — this script never touches
+# root's password unless you opt in here.
+# - "no" (default): ROOT_USER_SSH_PUBLIC_KEY is required.
+# - "yes": ROOT_USER_PASSWORD (min 12 characters) is required.
+ROOT_PASSWORD_AUTH_ENABLED="no"
+
+ROOT_USER_SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"    # Required unless ROOT_PASSWORD_AUTH_ENABLED=yes
+RESTRICTED_USER_SSH_PUBLIC_KEY="ssh-rsa AAAA...your-public-key"  # Required unless SSH_PASSWORD_AUTH_ENABLED=yes
+# ROOT_USER_PASSWORD="change-me-strong-password"        # Required if ROOT_PASSWORD_AUTH_ENABLED=yes (min 12 chars)
+# RESTRICTED_USER_PASSWORD="change-me-strong-password"  # Required if SSH_PASSWORD_AUTH_ENABLED=yes (min 12 chars)
 
 # ── phpMyAdmin — required only if PHPMYADMIN_ENABLED=yes ─────────────────
 PMA_PORT="61098"                         # phpMyAdmin port (1–65535)

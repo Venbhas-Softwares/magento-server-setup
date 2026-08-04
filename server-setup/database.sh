@@ -1,5 +1,6 @@
 # Module database — Database engine installation, hardening, and performance tuning
-# Uses: DB_ENABLED, DB_ENGINE, DB_VERSION, DB_ROOT_PASSWORD, TOTAL_RAM_GB
+# Uses: DB_ENABLED, DB_ENGINE, DB_VERSION, DB_ROOT_PASSWORD,
+#       MARIADB_BUFFER_POOL_MB (set by lib/functions.sh::calculate_resource_allocations)
 # Sets: DB_CLI, DB_SERVICE, DB_BACKEND (used by modules phpmyadmin and finalize)
 
 if [[ "${DB_ENABLED:-yes}" != "yes" ]]; then
@@ -36,7 +37,7 @@ query_cache_size = 0
 # Performance tuning
 
 # InnoDB Settings
-innodb_buffer_pool_size = $((TOTAL_RAM_GB * 512))M
+innodb_buffer_pool_size = ${MARIADB_BUFFER_POOL_MB}M
 innodb_buffer_pool_instances = 6
 innodb_log_file_size = 1G
 innodb_log_buffer_size = 32M
