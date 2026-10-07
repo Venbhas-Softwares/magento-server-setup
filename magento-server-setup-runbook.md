@@ -14,14 +14,15 @@ This runbook provisions a production PHP application server on Ubuntu 26.04 LTS:
 
 Nginx and Varnish are one minor or major version below Magento 2.4.9's list, and in both cases the version installed is the one Magento 2.4.8 lists. Nginx deliberately stays on Ubuntu's own package, so that it receives Ubuntu's security updates. Varnish 8 has no Ubuntu 26.04 package yet, so the runbook installs Ubuntu's Varnish 7.7, which runs Magento's exported VCL unchanged, and the **Varnish** section explains how to move to 8 once a 26.04 package exists.
 
-Everything can run on one server, or the database and OpenSearch can run on servers of their own. For example, a three-server setup has an app server (Nginx, PHP, Varnish, Valkey, phpMyAdmin), a database server (MariaDB), and an OpenSearch server. You run this same runbook on each server, choose in the **Variables** block which services that server runs, and skip the sections for services it does not run. Provision the database and OpenSearch servers first, so that the app server's final checks can reach them.
+Everything can run on one server, or the database and OpenSearch can run on servers of their own. For example, a three-server setup has an app server (Nginx, PHP, Varnish, Valkey, phpMyAdmin), a database server (MariaDB), and an OpenSearch server. You run this same runbook on each server, choose in the **Server role** block which services that server runs, and skip the sections for services it does not run. Provision the database and OpenSearch servers first, so that the app server's final checks can reach them.
 
 How to use it:
 
 - Each `bash` block has its own run button in Runme. Blocks labelled `text` are notes, not commands.
-- Run the blocks from top to bottom. Later blocks depend on values set by earlier ones.
+- The runbook is grouped by server. Part 1 runs on every server, Parts 2, 3, and 4 cover the database, OpenSearch, and app servers, Part 5 runs on every server again, and Part 6 runs on the app server once Magento is deployed. On each server, run the parts that apply to it from top to bottom, because later blocks depend on values set by earlier ones. A single server that runs everything goes through every part.
 - Each service section says which servers it applies to. The **Resource sizing** block also prints the list of sections to run on the current server.
-- Run the **Variables** and **Resource sizing** blocks first in every new Runme session. Variables last only for the current session, so if you restart VS Code or the Runme kernel, run those two blocks again before continuing. Blocks that need a variable stop with an error if it is missing, rather than running with an empty value.
+- Every block in a section that applies only to some servers first checks this server's **Variables** values. If you run such a block on the wrong server by mistake, it stops with a "Skip this block" message before changing anything, and Runme keeps none of its values.
+- Run the **Variables** blocks that apply to this server, then the **Resource sizing** block, first in every new Runme session. Variables last only for the current session, so if you restart VS Code or the Runme kernel, run those blocks again before continuing. Blocks that need a variable stop with an error if it is missing, rather than running with an empty value.
 - Blocks that generate a password print it once. Copy each one into your password manager straight away, then clear the cell output.
 
 ## Before you start (AWS)
@@ -51,19 +52,33 @@ OpenSearch server:
 
 On a single server, no other port needs to be open, because MariaDB, OpenSearch, Valkey, and phpMyAdmin all listen on `127.0.0.1` only. With separate servers, put them all in the same VPC and connect them through their private IP addresses. Database and OpenSearch traffic between the servers is not encrypted, which is acceptable only inside a private network that is closed to everything except the app servers.
 
-## Variables
+## Part 1: Every server, first
 
-Runme asks for each value when you run this block. Replace the defaults with the values for this server.
+Run this part on every server before anything else. It records what this server runs, calculates the memory for each of its services, and brings Ubuntu up to date. Every later part depends on it, which is why it comes first even though it is not specific to any one server.
 
-The first four values are used only on the app server; on a database or OpenSearch server you can keep the defaults. `ADMIN_EMAIL` is used only with `SSL_MODE=letsencrypt`, as the address Let's Encrypt writes to about expiring certificates. Keep `PHP_VERSION` at `8.5`: it is the only PHP version that Ubuntu 26.04 ships and that Magento 2.4.9 supports. The `INSTALL_*` values (`yes` or `no`) choose which services this server runs. `INSTALL_APP` covers Nginx, PHP-FPM, and Composer. Valkey, Varnish, and phpMyAdmin run alongside Nginx and PHP, so they require `INSTALL_APP=yes`.
+### Variables
 
-The last three values are needed only when services run on separate servers, and they take private IP addresses:
+The variables are split into three blocks, so that each server is asked only for the values it uses. Runme asks for each value when you run a block. Replace the defaults with the values for this server.
 
-- `APP_SERVER_IPS` is set on the database and OpenSearch servers. It lists the app servers that may connect, separated by spaces. Only these addresses are let through the firewall and given a database login.
-- `DB_SERVER_IP` is set on the app server when MariaDB runs elsewhere.
-- `OPENSEARCH_SERVER_IP` is set on the app server when OpenSearch runs elsewhere. Leave it empty if the application does not use OpenSearch.
+#### Server role
 
-`SSL_MODE` chooses how the app server handles HTTPS, and it is ignored on database and OpenSearch servers:
+Run this block on every server. Each value is `yes` or `no` and chooses which of the main services this server runs. `INSTALL_APP` covers Nginx, PHP-FPM, and Composer.
+
+```bash
+export INSTALL_APP="yes"
+export INSTALL_MARIADB="yes"
+export INSTALL_OPENSEARCH="yes"
+```
+
+#### App server settings
+
+Run this block only on a server with `INSTALL_APP=yes`. Skip it on a database or OpenSearch server.
+
+Keep `PHP_VERSION` at `8.5`: it is the only PHP version that Ubuntu 26.04 ships and that Magento 2.4.9 supports. `ADMIN_EMAIL` is used only with `SSL_MODE=letsencrypt`, as the address Let's Encrypt writes to about expiring certificates. Valkey, Varnish, and phpMyAdmin run alongside Nginx and PHP, so they are chosen here (`yes` or `no`).
+
+`DB_SERVER_IP` and `OPENSEARCH_SERVER_IP` take private IP addresses and are needed only when that service runs on a server of its own. Leave `DB_SERVER_IP` empty when MariaDB runs on this server, and leave `OPENSEARCH_SERVER_IP` empty when OpenSearch runs on this server or the application does not use it.
+
+`SSL_MODE` chooses how the app server handles HTTPS:
 
 - `letsencrypt` (the default) gets a free certificate from Let's Encrypt, which renews automatically. The domain's DNS must point to this server, and port 80 must be open to the internet.
 - `custom` uses a certificate you supply, such as a Cloudflare Origin Certificate or one bought from a certificate authority. You set its file paths in the **HTTPS** section.
@@ -72,19 +87,16 @@ The last three values are needed only when services run on separate servers, and
 `TRUSTED_PROXY_CIDRS` is used only with `SSL_MODE=off`. It lists the address ranges the load balancer connects from, usually the VPC's range, such as `10.0.0.0/16`, separated by spaces. Nginx then records each visitor's real IP address rather than the load balancer's, and the firewall accepts port 80 from those ranges only.
 
 ```bash
+[ "${INSTALL_APP:?Run the Server role block first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
 export DOMAIN_NAME="example.com"
 export WEB_USER="webuser"
 export PHP_VERSION="8.5"
 export ADMIN_EMAIL="admin@example.com"
 
-export INSTALL_APP="yes"
-export INSTALL_MARIADB="yes"
-export INSTALL_OPENSEARCH="yes"
 export INSTALL_VALKEY="yes"
 export INSTALL_VARNISH="yes"
 export INSTALL_PHPMYADMIN="yes"
 
-export APP_SERVER_IPS=""
 export DB_SERVER_IP=""
 export OPENSEARCH_SERVER_IP=""
 
@@ -92,55 +104,66 @@ export SSL_MODE="letsencrypt"
 export TRUSTED_PROXY_CIDRS=""
 ```
 
-For example, with an app server at `10.0.1.10`, a database server at `10.0.1.20`, and an OpenSearch server at `10.0.1.30`, the values differ like this (every value not shown keeps its default):
+#### Database and OpenSearch server settings
 
-```text
-App server:         INSTALL_MARIADB=no  INSTALL_OPENSEARCH=no
-                    DB_SERVER_IP=10.0.1.20  OPENSEARCH_SERVER_IP=10.0.1.30
+Run this block on a server that runs MariaDB or OpenSearch for app servers elsewhere. Skip it when everything runs on one server. `APP_SERVER_IPS` lists the private IP addresses of the app servers that may connect, separated by spaces. Only these addresses are let through the firewall and given a database login.
 
-Database server:    INSTALL_APP=no  INSTALL_OPENSEARCH=no  INSTALL_VALKEY=no
-                    INSTALL_VARNISH=no  INSTALL_PHPMYADMIN=no
-                    APP_SERVER_IPS=10.0.1.10
-
-OpenSearch server:  INSTALL_APP=no  INSTALL_MARIADB=no  INSTALL_VALKEY=no
-                    INSTALL_VARNISH=no  INSTALL_PHPMYADMIN=no
-                    APP_SERVER_IPS=10.0.1.10
+```bash
+[ "${INSTALL_MARIADB:?Run the Server role block first}" = yes ] || [ "$INSTALL_OPENSEARCH" = yes ] || { echo "Skip this block: this server runs neither MariaDB nor OpenSearch."; exit 1; }
+export APP_SERVER_IPS=""
 ```
 
-## Resource sizing
+For example, with an app server at `10.0.1.10`, a database server at `10.0.1.20`, and an OpenSearch server at `10.0.1.30`, each server runs these blocks with these values (every value not shown keeps its default):
 
-This block checks the choices made in the **Variables** block, reads the server's RAM, and calculates the memory for each service that this server runs, so that they all fit together. Services that run elsewhere get no memory here. Run it before the install sections.
+```text
+App server:         Server role                 INSTALL_MARIADB=no  INSTALL_OPENSEARCH=no
+                    App server settings         DB_SERVER_IP=10.0.1.20  OPENSEARCH_SERVER_IP=10.0.1.30
+
+Database server:    Server role                 INSTALL_APP=no  INSTALL_OPENSEARCH=no
+                    Database/OpenSearch         APP_SERVER_IPS=10.0.1.10
+
+OpenSearch server:  Server role                 INSTALL_APP=no  INSTALL_MARIADB=no
+                    Database/OpenSearch         APP_SERVER_IPS=10.0.1.10
+```
+
+### Resource sizing
+
+This block checks the choices made in the **Variables** blocks, reads the server's RAM, and calculates the memory for each service that this server runs, so that they all fit together. Services that run elsewhere get no memory here. Run it before the install sections.
 
 When MariaDB or OpenSearch is the only main service on a server, it gets a dedicated server's share of RAM: 70% for the MariaDB buffer pool, or 50% for the OpenSearch heap (capped at 30 GB so that Java keeps its memory-efficient object pointers, with the rest of the RAM serving as file cache). When it shares the server with the application or with the other service, it gets a smaller share: the MariaDB buffer pool gets 25% of RAM on servers with up to 8 GB and 30% above that, and the OpenSearch heap gets 25% of RAM, capped at 8 GB (or 1 GB on servers with 6 GB of RAM or less).
 
 ```bash
-: "${INSTALL_APP:?Run the Variables block first}"
+: "${INSTALL_APP:?Run the Variables blocks first}"
 
-# Check the choices from the Variables block
+# Check the choices from the Variables blocks
 ROLE_OK=yes
-for PAIR in "INSTALL_APP=$INSTALL_APP" "INSTALL_MARIADB=$INSTALL_MARIADB" "INSTALL_OPENSEARCH=$INSTALL_OPENSEARCH" \
-            "INSTALL_VALKEY=$INSTALL_VALKEY" "INSTALL_VARNISH=$INSTALL_VARNISH" "INSTALL_PHPMYADMIN=$INSTALL_PHPMYADMIN"; do
+for PAIR in "INSTALL_APP=$INSTALL_APP" "INSTALL_MARIADB=$INSTALL_MARIADB" "INSTALL_OPENSEARCH=$INSTALL_OPENSEARCH"; do
   case "${PAIR#*=}" in
     yes|no) ;;
     *) echo "ERROR: ${PAIR%%=*} must be yes or no, not '${PAIR#*=}'."; ROLE_OK=no ;;
   esac
 done
 if [ "$INSTALL_APP" = no ]; then
-  for PAIR in "INSTALL_VALKEY=$INSTALL_VALKEY" "INSTALL_VARNISH=$INSTALL_VARNISH" "INSTALL_PHPMYADMIN=$INSTALL_PHPMYADMIN"; do
-    if [ "${PAIR#*=}" = yes ]; then
-      echo "ERROR: ${PAIR%%=*}=yes requires INSTALL_APP=yes, because it runs alongside Nginx and PHP."; ROLE_OK=no
-    fi
-  done
+  # Valkey, Varnish, and phpMyAdmin run only alongside the application
+  export INSTALL_VALKEY=no INSTALL_VARNISH=no INSTALL_PHPMYADMIN=no
   if [ "$INSTALL_MARIADB" != yes ] && [ "$INSTALL_OPENSEARCH" != yes ]; then
     echo "ERROR: No service is selected for this server."; ROLE_OK=no
   elif [ -z "$APP_SERVER_IPS" ]; then
-    echo "ERROR: Set APP_SERVER_IPS to the private IP address of each app server that connects to this server."; ROLE_OK=no
+    echo "ERROR: Run the Database and OpenSearch server settings block, with APP_SERVER_IPS set to the private IP address of each app server that connects to this server."; ROLE_OK=no
   fi
 fi
-if [ "$INSTALL_APP" = yes ] && [ "$INSTALL_MARIADB" = no ] && [ -z "$DB_SERVER_IP" ]; then
-  echo "ERROR: Set DB_SERVER_IP to the database server's private IP address."; ROLE_OK=no
-fi
-if [ "$INSTALL_APP" = yes ]; then
+if [ "$INSTALL_APP" = yes ] && [ -z "$DOMAIN_NAME" ]; then
+  echo "ERROR: INSTALL_APP=yes, so run the App server settings block too."; ROLE_OK=no
+elif [ "$INSTALL_APP" = yes ]; then
+  for PAIR in "INSTALL_VALKEY=$INSTALL_VALKEY" "INSTALL_VARNISH=$INSTALL_VARNISH" "INSTALL_PHPMYADMIN=$INSTALL_PHPMYADMIN"; do
+    case "${PAIR#*=}" in
+      yes|no) ;;
+      *) echo "ERROR: ${PAIR%%=*} must be yes or no, not '${PAIR#*=}'."; ROLE_OK=no ;;
+    esac
+  done
+  if [ "$INSTALL_MARIADB" = no ] && [ -z "$DB_SERVER_IP" ]; then
+    echo "ERROR: Set DB_SERVER_IP to the database server's private IP address."; ROLE_OK=no
+  fi
   case "$SSL_MODE" in
     letsencrypt|custom) ;;
     off)
@@ -249,26 +272,26 @@ if [ "$ROLE_OK" = yes ]; then
 
   echo
   echo "Sections to run on this server:"
-  echo "  System update and base packages"
-  [ "$INSTALL_APP" = yes ]        && echo "  Restricted user and web root, PHP, Nginx"
-  [ "$INSTALL_MARIADB" = yes ]    && echo "  MariaDB"
-  [ "$INSTALL_OPENSEARCH" = yes ] && echo "  OpenSearch"
-  [ "$INSTALL_VALKEY" = yes ]     && echo "  Valkey"
-  [ "$INSTALL_VARNISH" = yes ]    && echo "  Varnish"
-  [ "$INSTALL_APP" = yes ]        && echo "  Composer"
-  [ "$INSTALL_PHPMYADMIN" = yes ] && echo "  phpMyAdmin"
-  if [ "$INSTALL_APP" = yes ] && [ "$SSL_MODE" = letsencrypt ]; then echo "  HTTPS (Let's Encrypt certificate)"; fi
-  if [ "$INSTALL_APP" = yes ] && [ "$SSL_MODE" = custom ]; then echo "  HTTPS (your own certificate)"; fi
-  echo "  Security hardening, Final verification"
-  [ "$INSTALL_APP" = yes ]        && echo "  Magento 2.4.9 configuration (after Magento's code is deployed)"
+  echo "  Part 1: System update and base packages"
+  [ "$INSTALL_MARIADB" = yes ]    && echo "  Part 2: MariaDB"
+  [ "$INSTALL_OPENSEARCH" = yes ] && echo "  Part 3: OpenSearch"
+  [ "$INSTALL_APP" = yes ]        && echo "  Part 4: Restricted user and web root, PHP, Nginx"
+  [ "$INSTALL_VALKEY" = yes ]     && echo "  Part 4: Valkey"
+  [ "$INSTALL_VARNISH" = yes ]    && echo "  Part 4: Varnish"
+  [ "$INSTALL_APP" = yes ]        && echo "  Part 4: Composer"
+  [ "$INSTALL_PHPMYADMIN" = yes ] && echo "  Part 4: phpMyAdmin"
+  if [ "$INSTALL_APP" = yes ] && [ "$SSL_MODE" = letsencrypt ]; then echo "  Part 4: HTTPS (Let's Encrypt certificate)"; fi
+  if [ "$INSTALL_APP" = yes ] && [ "$SSL_MODE" = custom ]; then echo "  Part 4: HTTPS (your own certificate)"; fi
+  echo "  Part 5: Security hardening, Final verification"
+  if [ "$INSTALL_APP" = yes ]; then echo "  Part 6: Magento 2.4.9 configuration (after Magento's code is deployed)"; fi
 else
   unset PRIVATE_IP TOTAL_RAM_MB DB_BUFFER_POOL_MB OPENSEARCH_HEAP_MB VALKEY_CACHE_MB VALKEY_SESSION_MB VARNISH_CACHE_MB
   unset PHP_MAX_CHILDREN PHP_START_SERVERS PHP_MIN_SPARE PHP_MAX_SPARE
-  echo "Fix the values above in the Variables block, then run the Variables and Resource sizing blocks again."
+  echo "Fix the values above in the Variables blocks, then run those blocks and the Resource sizing block again."
 fi
 ```
 
-## System update and base packages
+### System update and base packages
 
 Confirm that the server runs Ubuntu 26.04 LTS. Every repository and package name in this runbook is chosen for that release.
 
@@ -293,7 +316,7 @@ sudo sysctl --system > /dev/null
 sysctl vm.max_map_count vm.overcommit_memory
 ```
 
-If the update installed a new kernel, reboot now. Reconnect afterwards and run the **Variables** and **Resource sizing** blocks again.
+If the update installed a new kernel, reboot now. Reconnect afterwards and run this server's **Variables** blocks and the **Resource sizing** block again.
 
 ```bash
 if [ -f /var/run/reboot-required ]; then echo "Reboot required"; else echo "No reboot needed"; fi
@@ -303,293 +326,49 @@ if [ -f /var/run/reboot-required ]; then echo "Reboot required"; else echo "No r
 sudo reboot
 ```
 
-## Restricted user and web root
+## Part 2: Database server
 
-Run this section on the app server only (`INSTALL_APP=yes`).
+Run this part on the server with `INSTALL_MARIADB=yes`: the database server in a multi-server setup, or the only server in a single-server setup. Skip it on every other server.
 
-The restricted user owns the application files. It has no sudo access, logs in with an SSH key only, and shares the `www-data` group with PHP-FPM and Nginx.
-
-```bash
-: "${WEB_USER:?Run the Variables block first}"
-sudo adduser --disabled-password --gecos "" "$WEB_USER"
-sudo usermod -aG www-data "$WEB_USER"
-sudo usermod -aG "$WEB_USER" www-data
-```
-
-Replace the key below with the public key (from your Mac) that should log in as this user.
-
-```bash
-: "${WEB_USER:?Run the Variables block first}"
-PUBKEY="ssh-ed25519 AAAA_REPLACE_WITH_YOUR_PUBLIC_KEY you@your-mac"
-sudo install -d -m 700 -o "$WEB_USER" -g "$WEB_USER" "/home/$WEB_USER/.ssh"
-sudo touch "/home/$WEB_USER/.ssh/authorized_keys"
-sudo grep -qxF "$PUBKEY" "/home/$WEB_USER/.ssh/authorized_keys" || echo "$PUBKEY" | sudo tee -a "/home/$WEB_USER/.ssh/authorized_keys" > /dev/null
-sudo chown "$WEB_USER:$WEB_USER" "/home/$WEB_USER/.ssh/authorized_keys"
-sudo chmod 600 "/home/$WEB_USER/.ssh/authorized_keys"
-```
-
-Generate a Git deploy key for the restricted user. Add the printed public key to your Git repository as a read-only deploy key.
-
-```bash
-: "${WEB_USER:?Run the Variables block first}"
-sudo -u "$WEB_USER" ssh-keygen -t ed25519 -N "" -C "$WEB_USER@$DOMAIN_NAME" -f "/home/$WEB_USER/.ssh/id_ed25519"
-sudo cat "/home/$WEB_USER/.ssh/id_ed25519.pub"
-```
-
-Create the web root. The setgid bit (`2775`) makes new files and folders inherit the `www-data` group automatically.
-
-```bash
-: "${DOMAIN_NAME:?Run the Variables block first}"
-sudo mkdir -p "/var/www/$DOMAIN_NAME"
-sudo chown -R "$WEB_USER:www-data" "/var/www/$DOMAIN_NAME"
-sudo chmod 2775 "/var/www/$DOMAIN_NAME"
-ls -ld "/var/www/$DOMAIN_NAME"
-```
-
-## PHP
-
-Run this section on the app server only (`INSTALL_APP=yes`).
-
-Ubuntu 26.04 ships PHP 8.5, which is the only PHP version Magento 2.4.9 supports, so no third-party repository is needed and PHP receives Ubuntu's security updates. OPcache is built into PHP 8.5, so there is no separate `opcache` package.
-
-```bash
-: "${PHP_VERSION:?Run the Variables block first}"
-V="$PHP_VERSION"
-sudo apt install -y php$V-fpm php$V-cli php$V-common php$V-mysql php$V-bcmath php$V-curl \
-  php$V-gd php$V-intl php$V-mbstring php$V-soap php$V-xml php$V-xsl php$V-zip php$V-gmp php$V-redis
-php -v
-```
-
-Check that every PHP extension Magento 2.4.9 requires is loaded. The block prints `All required extensions are loaded`, or lists the missing ones.
-
-```bash
-MISSING=""
-for EXT in bcmath ctype curl dom fileinfo filter ftp gd hash iconv intl json libxml mbstring openssl \
-           pcre pdo_mysql Reflection SimpleXML soap sockets sodium SPL tokenizer xmlwriter xsl zip zlib; do
-  php -m | grep -qix "$EXT" || MISSING="$MISSING $EXT"
-done
-if [ -z "$MISSING" ]; then echo "All required extensions are loaded"; else echo "Missing:$MISSING"; fi
-```
-
-### php.ini production settings
-
-The settings go into separate override files, so a PHP package update never overwrites them. The web (FPM) settings are stricter than the command-line (CLI) settings. They follow Adobe's recommendations for Magento: `opcache.save_comments = 1` is required, because Magento generates code from PHP comments, and the realpath cache and OPcache sizes match a full Magento codebase. Timeouts are 600 seconds, matching the `fastcgi_read_timeout` in Magento's own Nginx configuration, so that long admin actions such as imports are not cut off. The CLI memory limit is 2 GB, which Magento's compilation and static content deployment commands need.
-
-```bash
-: "${PHP_VERSION:?Run the Variables block first}"
-sudo tee "/etc/php/$PHP_VERSION/fpm/conf.d/99-production.ini" > /dev/null <<'EOF'
-memory_limit = 756M
-max_execution_time = 600
-max_input_time = 600
-max_input_vars = 5000
-upload_max_filesize = 64M
-post_max_size = 64M
-date.timezone = UTC
-
-; Security
-expose_php = Off
-display_errors = Off
-display_startup_errors = Off
-log_errors = On
-error_reporting = E_ALL & ~E_DEPRECATED
-session.cookie_httponly = 1
-session.use_strict_mode = 1
-zend.assertions = -1
-
-; Performance
-realpath_cache_size = 10M
-realpath_cache_ttl = 7200
-opcache.enable = 1
-opcache.memory_consumption = 512
-opcache.interned_strings_buffer = 64
-opcache.max_accelerated_files = 60000
-opcache.validate_timestamps = 0
-opcache.save_comments = 1
-opcache.jit_buffer_size = 256M
-opcache.jit = tracing
-EOF
-
-sudo tee "/etc/php/$PHP_VERSION/cli/conf.d/99-production.ini" > /dev/null <<'EOF'
-memory_limit = 2G
-max_input_vars = 5000
-date.timezone = UTC
-zend.assertions = -1
-opcache.save_comments = 1
-expose_php = Off
-realpath_cache_size = 10M
-realpath_cache_ttl = 7200
-EOF
-```
-
-`opcache.validate_timestamps = 0` means PHP never checks whether code files have changed. This is the correct production setting, but after every deployment you must restart PHP-FPM (`sudo systemctl restart php8.5-fpm`), or the old code keeps running.
-
-### PHP-FPM pool
-
-The pool settings go into a separate file, `zz-tuning.conf`, and the package's own `www.conf` is left untouched. Both files define the same `[www]` pool, and PHP-FPM reads them in alphabetical order, so the values in `zz-tuning.conf` win. Because `www.conf` is never edited, a PHP package upgrade can update it without stopping to ask which version to keep, and the tuning survives the upgrade.
-
-```bash
-: "${PHP_VERSION:?Run the Variables block first}"
-: "${PHP_MAX_CHILDREN:?Run the Resource sizing block first}"
-sudo tee "/etc/php/$PHP_VERSION/fpm/pool.d/zz-tuning.conf" > /dev/null <<EOF
-; Overrides for the [www] pool defined in www.conf
-[www]
-pm = dynamic
-pm.max_children = $PHP_MAX_CHILDREN
-pm.start_servers = $PHP_START_SERVERS
-pm.min_spare_servers = $PHP_MIN_SPARE
-pm.max_spare_servers = $PHP_MAX_SPARE
-pm.max_requests = 500
-request_terminate_timeout = 600
-EOF
-
-# -tt prints the effective configuration, which confirms the overrides are in use
-sudo "php-fpm$PHP_VERSION" -tt 2>&1 | grep -E "(pm(\.(max_children|start_servers|min_spare_servers|max_spare_servers|max_requests))?|request_terminate_timeout) = "
-sudo systemctl enable --now "php$PHP_VERSION-fpm"
-sudo systemctl restart "php$PHP_VERSION-fpm"
-```
-
-`pm.max_requests = 500` recycles each worker after 500 requests, which protects the server from slow memory leaks in application code.
-
-## Nginx
-
-Run this section on the app server only (`INSTALL_APP=yes`).
-
-Nginx comes from Ubuntu 26.04's own repository (version 1.28), so it receives Ubuntu's security updates. Magento 2.4.9 lists Nginx 1.30, and 1.28 is the version Magento 2.4.8 lists. If Magento's `nginx.conf.sample` ever fails `nginx -t` on 1.28, that is the point to revisit this choice.
-
-```bash
-sudo apt install -y nginx
-sudo systemctl enable --now nginx
-nginx -v
-```
-
-Ubuntu's Nginx runs as `www-data`, the same account as PHP-FPM, and already ships the `snippets/fastcgi-php.conf` file that the PHP blocks below include. Each site (vhost) follows Ubuntu's convention: its file goes in `/etc/nginx/sites-available/`, and a link in `/etc/nginx/sites-enabled/` turns it on, so you can disable a site by removing its link without deleting its configuration. Settings that apply to every site, such as the two blocks below, go in `/etc/nginx/conf.d/`. Ubuntu's `nginx.conf` loads both folders, so the package's own files are never edited.
-
-Global settings: hide the Nginx version, allow 64 MB uploads, and trust the visitor IP address forwarded by Varnish, the HTTPS proxy, and (with `SSL_MODE=off`) the load balancer ranges in `TRUSTED_PROXY_CIDRS`. The `map` lets PHP know when the original request used HTTPS.
-
-```bash
-: "${SSL_MODE:?Run the Variables block first}"
-sudo tee /etc/nginx/conf.d/00-server.conf > /dev/null <<'EOF'
-server_tokens off;
-client_max_body_size 64m;
-
-# Real visitor IP: requests reach the application through Varnish on 127.0.0.1
-set_real_ip_from 127.0.0.1;
-real_ip_header X-Forwarded-For;
-real_ip_recursive on;
-
-# Tell PHP when the visitor connected over HTTPS (TLS ends at the :443 proxy or the load balancer)
-map $http_x_forwarded_proto $fe_https {
-    default off;
-    https   on;
-}
-EOF
-if [ "$SSL_MODE" = off ]; then
-  for CIDR in $TRUSTED_PROXY_CIDRS; do
-    echo "set_real_ip_from $CIDR;" | sudo tee -a /etc/nginx/conf.d/00-server.conf > /dev/null
-  done
-fi
-grep set_real_ip_from /etc/nginx/conf.d/00-server.conf
-```
-
-Define the PHP-FPM upstream under the name `fastcgi_backend`. Magento's own Nginx configuration (`nginx.conf.sample`) sends PHP requests to an upstream with exactly that name, so defining it here lets you switch to Magento's configuration later without further changes.
-
-```bash
-: "${PHP_VERSION:?Run the Variables block first}"
-sudo tee /etc/nginx/conf.d/01-php-fpm.conf > /dev/null <<EOF
-upstream fastcgi_backend {
-    server unix:/run/php/php$PHP_VERSION-fpm.sock;
-}
-EOF
-```
-
-Disable the default site. It listens on port 80, which Varnish or the application vhost will take over. This removes only the link in `sites-enabled`; the package's file in `sites-available` stays in place.
-
-```bash
-sudo rm -f /etc/nginx/sites-enabled/default
-```
-
-### Application vhost
-
-With Varnish, the application vhost listens on `127.0.0.1:8080` only, so all public traffic must pass through Varnish. Without Varnish (`INSTALL_VARNISH=no`), it listens on port 80 directly. It serves the web root with PHP and is deliberately generic; replace it with your application's own Nginx configuration when you deploy the application. For Magento, the **Magento 2.4.9 configuration** section switches it to Magento's `nginx.conf.sample`.
-
-```bash
-: "${DOMAIN_NAME:?Run the Variables block first}"
-: "${PHP_VERSION:?Run the Variables block first}"
-VHOST_LISTEN="127.0.0.1:8080"
-[ "$INSTALL_VARNISH" = no ] && VHOST_LISTEN="80"
-sudo mkdir -p /var/www/letsencrypt
-sudo tee "/etc/nginx/sites-available/$DOMAIN_NAME" > /dev/null <<EOF
-server {
-    listen $VHOST_LISTEN;
-    server_name $DOMAIN_NAME www.$DOMAIN_NAME;
-
-    root /var/www/$DOMAIN_NAME;
-    index index.php index.html;
-
-    # Let's Encrypt HTTP challenge
-    location ^~ /.well-known/acme-challenge/ {
-        root /var/www/letsencrypt;
-    }
-
-    location / {
-        try_files \$uri \$uri/ /index.php?\$args;
-    }
-
-    location ~ \.php\$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_param HTTPS \$fe_https;
-        fastcgi_pass fastcgi_backend;
-        fastcgi_read_timeout 600s;
-        fastcgi_buffers 16 16k;
-        fastcgi_buffer_size 32k;
-    }
-
-    # Block hidden files such as .git and .env
-    location ~ /\.(?!well-known) {
-        deny all;
-    }
-
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-}
-EOF
-sudo ln -sf "/etc/nginx/sites-available/$DOMAIN_NAME" "/etc/nginx/sites-enabled/$DOMAIN_NAME"
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-## MariaDB
+### MariaDB
 
 Run this section on the server with `INSTALL_MARIADB=yes`. If the app runs on other servers, this section also opens MariaDB to the addresses in `APP_SERVER_IPS`.
 
-Magento 2.4.9 supports MariaDB 12.3 (recommended) and 11.8. Ubuntu 26.04 ships 11.8, so this block adds MariaDB's official repository to install 12.3. To stay on Ubuntu's 11.8 instead, skip this block.
+Magento 2.4.9 supports MariaDB 12.3 (recommended) and 11.8. Ubuntu 26.04 ships 11.8, so this block adds MariaDB's official repository to install 12.3. To stay on Ubuntu's 11.8 instead, skip this block. The `--skip-maxscale` flag is required because the setup script otherwise also adds the MaxScale repository, which MariaDB does not publish for Ubuntu 26.04; its missing Release file makes `apt update` fail and aborts the script before the signing keys are installed. Magento does not use MaxScale.
 
 ```bash
-curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | sudo bash -s -- --mariadb-server-version=12.3
+[ "${INSTALL_MARIADB:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_MARIADB=$INSTALL_MARIADB."; exit 1; }
+curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | sudo bash -s -- --mariadb-server-version=12.3 --skip-maxscale
 sudo apt update
 apt-cache policy mariadb-server
 ```
 
 The Candidate line above shows the version that will be installed. If it is correct, continue.
 
+The MariaDB package asks during installation whether to enable its Feedback plugin, which sends anonymous usage statistics to mariadb.org. Runme cells cannot answer that prompt, so this block answers it in advance with "no" and installs non-interactively.
+
 ```bash
-sudo apt install -y mariadb-server
+[ "${INSTALL_MARIADB:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_MARIADB=$INSTALL_MARIADB."; exit 1; }
+echo "mariadb-server mariadb-server/feedback_optin boolean false" | sudo debconf-set-selections
+sudo DEBIAN_FRONTEND=noninteractive apt install -y mariadb-server
 sudo systemctl enable --now mariadb
 ```
 
 This command is interactive. Answer **Y** to removing anonymous users, disallowing remote root login, and removing the test database. The root account already uses Unix socket authentication, so you do not need to set a root password.
 
 ```bash
+[ "${INSTALL_MARIADB:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_MARIADB=$INSTALL_MARIADB."; exit 1; }
 sudo mariadb-secure-installation
 ```
 
-### MariaDB production settings
+#### MariaDB production settings
 
 MariaDB always listens on `127.0.0.1`. When `APP_SERVER_IPS` is set, it also listens on this server's private IP address, so the app servers can connect. Only the app servers' addresses get through the firewall and receive a database login, both of which are set up later in this runbook. Listening on two addresses requires MariaDB 10.11 or later, which both supported versions are.
 
 The settings follow Adobe's recommendations for Magento. `utf8mb4_general_ci` is the collation Magento's own tables use; MariaDB 11.5 and later default to `utf8mb4_uca1400_ai_ci`, and mixing the two causes "Illegal mix of collations" errors, so the server and its client connections are pinned to `utf8mb4_general_ci`. `max_allowed_packet` is raised for large catalog imports, the temporary table sizes are well above the 64 MB that Adobe suggests for indexers, and the two optimizer settings are Adobe's recommendation for faster reindexing on MariaDB.
 
 ```bash
+[ "${INSTALL_MARIADB:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_MARIADB=$INSTALL_MARIADB."; exit 1; }
 : "${DB_BUFFER_POOL_MB:?Run the Resource sizing block first}"
 DB_BIND="127.0.0.1"
 [ -n "$APP_SERVER_IPS" ] && DB_BIND="127.0.0.1,$PRIVATE_IP"
@@ -639,16 +418,18 @@ sudo mariadb -e "SELECT VERSION(); SHOW VARIABLES WHERE Variable_name IN ('innod
 
 `innodb_buffer_pool_instances` is deliberately absent. MariaDB 10.6 and later removed that option, and MariaDB 12 refuses to start if it is present.
 
-### Application database and user
+#### Application database and user
 
 Set the database and user names when Runme asks, then run the second block. When the app runs on this server, the block creates the user for both `localhost` (Unix socket) and `127.0.0.1` (TCP), because `skip-name-resolve` treats these as different hosts. It also creates the user for each address in `APP_SERVER_IPS`, so remote app servers can log in, and no other address can.
 
 ```bash
+[ "${INSTALL_MARIADB:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_MARIADB=$INSTALL_MARIADB."; exit 1; }
 export DB_NAME="appdb"
 export DB_USER="appuser"
 ```
 
 ```bash
+[ "${INSTALL_MARIADB:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_MARIADB=$INSTALL_MARIADB."; exit 1; }
 : "${DB_NAME:?Run the previous block first}"
 : "${TOTAL_RAM_MB:?Run the Resource sizing block first}"
 DB_PASSWORD="$(openssl rand -hex 24)"
@@ -672,13 +453,18 @@ if [ -n "$APP_SERVER_IPS" ]; then echo "Host for remote app servers: $PRIVATE_IP
 
 Running the block again generates and sets a new password, so you can also use it to rotate the password.
 
-## OpenSearch
+## Part 3: OpenSearch server
+
+Run this part on the server with `INSTALL_OPENSEARCH=yes`, and skip it on every other server.
+
+### OpenSearch
 
 Run this section on the server with `INSTALL_OPENSEARCH=yes`. If the app runs on other servers, this section also opens OpenSearch to them.
 
 Add OpenSearch's official repository. Magento 2.4.9 supports OpenSearch 3, so the block uses the `3.x` repository.
 
 ```bash
+[ "${INSTALL_OPENSEARCH:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_OPENSEARCH=$INSTALL_OPENSEARCH."; exit 1; }
 curl -o- https://artifacts.opensearch.org/publickeys/opensearch-release.pgp | sudo gpg --dearmor --batch --yes -o /usr/share/keyrings/opensearch-release-keyring
 echo "deb [signed-by=/usr/share/keyrings/opensearch-release-keyring] https://artifacts.opensearch.org/releases/bundle/opensearch/3.x/apt stable main" | sudo tee /etc/apt/sources.list.d/opensearch-3.x.list
 sudo apt update
@@ -688,12 +474,14 @@ apt list -a opensearch
 Set the version you want from the list above when Runme asks. 3.9.0 was the newest 3.x release when this runbook was written.
 
 ```bash
+[ "${INSTALL_OPENSEARCH:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_OPENSEARCH=$INSTALL_OPENSEARCH."; exit 1; }
 export OPENSEARCH_VERSION="3.9.0"
 ```
 
 This block installs OpenSearch and prevents automatic upgrades to a version your application may not support. `DISABLE_INSTALL_DEMO_CONFIG=true` (available from OpenSearch 3.7) stops the installer from generating demo certificates and writing the security plugin's demo settings into `opensearch.yml`. That keeps the package's `opensearch.yml` exactly as shipped, which the next section relies on, and it also means no initial admin password is needed, because the security plugin is disabled below.
 
 ```bash
+[ "${INSTALL_OPENSEARCH:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_OPENSEARCH=$INSTALL_OPENSEARCH."; exit 1; }
 : "${OPENSEARCH_VERSION:?Run the previous block first}"
 sudo env DISABLE_INSTALL_DEMO_CONFIG=true apt install -y "opensearch=$OPENSEARCH_VERSION"
 sudo apt-mark hold opensearch
@@ -702,11 +490,12 @@ sudo apt-mark hold opensearch
 Install the ICU and phonetic analysis plugins. Adobe enables both for OpenSearch on Adobe Commerce Cloud, and they improve search for accented and non-English text. The plugin installer fetches the build that matches the installed OpenSearch version. If you upgrade OpenSearch later, remove and reinstall both plugins, because a plugin built for another version stops OpenSearch from starting.
 
 ```bash
+[ "${INSTALL_OPENSEARCH:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_OPENSEARCH=$INSTALL_OPENSEARCH."; exit 1; }
 sudo /usr/share/opensearch/bin/opensearch-plugin install --batch analysis-icu analysis-phonetic
 sudo /usr/share/opensearch/bin/opensearch-plugin list
 ```
 
-### OpenSearch production settings
+#### OpenSearch production settings
 
 This block configures OpenSearch before its first start. It runs as a single node, uses the heap size from the sizing block, and has the security plugin disabled. Its HTTP port (9200) listens on `127.0.0.1`, and also on this server's private IP address when `APP_SERVER_IPS` is set. The internal node-to-node port (9300) stays on `127.0.0.1`, because a single node has no other nodes to talk to. Applications connect over plain HTTP without a password, which is safe only because port 9200 is never exposed beyond this server and the app servers: the security group and the firewall rules later in this runbook let no other address reach it.
 
@@ -718,6 +507,7 @@ None of the package's files are edited, so an OpenSearch upgrade never stops to 
 The block is safe to run more than once, and running it again after an upgrade rebuilds the drop-in from the new package's start command.
 
 ```bash
+[ "${INSTALL_OPENSEARCH:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_OPENSEARCH=$INSTALL_OPENSEARCH."; exit 1; }
 : "${OPENSEARCH_HEAP_MB:?Run the Resource sizing block first}"
 OS_BIND="127.0.0.1"
 [ -n "$APP_SERVER_IPS" ] && OS_BIND="127.0.0.1,$PRIVATE_IP"
@@ -736,6 +526,7 @@ sudo systemctl restart opensearch.service
 OpenSearch takes up to a minute to start. This block waits for it, then shows the cluster information and the settings OpenSearch is actually using. A JSON response with the version number means OpenSearch is running, and the second response should show the `network.host`, `transport.host`, `discovery.type`, and `plugins.security.disabled` values from the drop-in.
 
 ```bash
+[ "${INSTALL_OPENSEARCH:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_OPENSEARCH=$INSTALL_OPENSEARCH."; exit 1; }
 for i in $(seq 1 30); do
   if curl -s http://127.0.0.1:9200 > /dev/null; then break; fi
   sleep 2
@@ -745,7 +536,279 @@ curl -s "http://127.0.0.1:9200/_nodes/_local/settings?pretty&filter_path=nodes.*
 if [ -n "$APP_SERVER_IPS" ]; then echo "Address for remote app servers: http://$PRIVATE_IP:9200"; fi
 ```
 
-## Valkey
+## Part 4: App server
+
+Run this part on the server with `INSTALL_APP=yes`. Valkey, Varnish, phpMyAdmin, and HTTPS also have settings of their own, so skip any of those sections that this server does not use.
+
+### Restricted user and web root
+
+Run this section on the app server only (`INSTALL_APP=yes`).
+
+The restricted user owns the application files. It has no sudo access, logs in with an SSH key only, and shares the `www-data` group with PHP-FPM and Nginx.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${WEB_USER:?Run the Variables blocks first}"
+sudo adduser --disabled-password --gecos "" "$WEB_USER"
+sudo usermod -aG www-data "$WEB_USER"
+sudo usermod -aG "$WEB_USER" www-data
+```
+
+Replace the key below with the public key (from your Mac) that should log in as this user.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${WEB_USER:?Run the Variables blocks first}"
+PUBKEY="ssh-ed25519 AAAA_REPLACE_WITH_YOUR_PUBLIC_KEY you@your-mac"
+sudo install -d -m 700 -o "$WEB_USER" -g "$WEB_USER" "/home/$WEB_USER/.ssh"
+sudo touch "/home/$WEB_USER/.ssh/authorized_keys"
+sudo grep -qxF "$PUBKEY" "/home/$WEB_USER/.ssh/authorized_keys" || echo "$PUBKEY" | sudo tee -a "/home/$WEB_USER/.ssh/authorized_keys" > /dev/null
+sudo chown "$WEB_USER:$WEB_USER" "/home/$WEB_USER/.ssh/authorized_keys"
+sudo chmod 600 "/home/$WEB_USER/.ssh/authorized_keys"
+```
+
+Generate a Git deploy key for the restricted user. Add the printed public key to your Git repository as a read-only deploy key.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${WEB_USER:?Run the Variables blocks first}"
+sudo -u "$WEB_USER" ssh-keygen -t ed25519 -N "" -C "$WEB_USER@$DOMAIN_NAME" -f "/home/$WEB_USER/.ssh/id_ed25519"
+sudo cat "/home/$WEB_USER/.ssh/id_ed25519.pub"
+```
+
+Create the web root. The setgid bit (`2775`) makes new files and folders inherit the `www-data` group automatically.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
+sudo mkdir -p "/var/www/$DOMAIN_NAME"
+sudo chown -R "$WEB_USER:www-data" "/var/www/$DOMAIN_NAME"
+sudo chmod 2775 "/var/www/$DOMAIN_NAME"
+ls -ld "/var/www/$DOMAIN_NAME"
+```
+
+### PHP
+
+Run this section on the app server only (`INSTALL_APP=yes`).
+
+Ubuntu 26.04 ships PHP 8.5, which is the only PHP version Magento 2.4.9 supports, so no third-party repository is needed and PHP receives Ubuntu's security updates. OPcache is built into PHP 8.5, so there is no separate `opcache` package.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${PHP_VERSION:?Run the Variables blocks first}"
+V="$PHP_VERSION"
+sudo apt install -y php$V-fpm php$V-cli php$V-common php$V-mysql php$V-bcmath php$V-curl \
+  php$V-gd php$V-intl php$V-mbstring php$V-soap php$V-xml php$V-xsl php$V-zip php$V-gmp php$V-redis
+php -v
+```
+
+Check that every PHP extension Magento 2.4.9 requires is loaded. The block prints `All required extensions are loaded`, or lists the missing ones.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+MISSING=""
+for EXT in bcmath ctype curl dom fileinfo filter ftp gd hash iconv intl json libxml mbstring openssl \
+           pcre pdo_mysql Reflection SimpleXML soap sockets sodium SPL tokenizer xmlwriter xsl zip zlib; do
+  php -m | grep -qix "$EXT" || MISSING="$MISSING $EXT"
+done
+if [ -z "$MISSING" ]; then echo "All required extensions are loaded"; else echo "Missing:$MISSING"; fi
+```
+
+#### php.ini production settings
+
+The settings go into separate override files, so a PHP package update never overwrites them. The web (FPM) settings are stricter than the command-line (CLI) settings. They follow Adobe's recommendations for Magento: `opcache.save_comments = 1` is required, because Magento generates code from PHP comments, and the realpath cache and OPcache sizes match a full Magento codebase. Timeouts are 600 seconds, matching the `fastcgi_read_timeout` in Magento's own Nginx configuration, so that long admin actions such as imports are not cut off. The CLI memory limit is 2 GB, which Magento's compilation and static content deployment commands need.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${PHP_VERSION:?Run the Variables blocks first}"
+sudo tee "/etc/php/$PHP_VERSION/fpm/conf.d/99-production.ini" > /dev/null <<'EOF'
+memory_limit = 756M
+max_execution_time = 600
+max_input_time = 600
+max_input_vars = 5000
+upload_max_filesize = 64M
+post_max_size = 64M
+date.timezone = UTC
+
+; Security
+expose_php = Off
+display_errors = Off
+display_startup_errors = Off
+log_errors = On
+error_reporting = E_ALL & ~E_DEPRECATED
+session.cookie_httponly = 1
+session.use_strict_mode = 1
+zend.assertions = -1
+
+; Performance
+realpath_cache_size = 10M
+realpath_cache_ttl = 7200
+opcache.enable = 1
+opcache.memory_consumption = 512
+opcache.interned_strings_buffer = 64
+opcache.max_accelerated_files = 60000
+opcache.validate_timestamps = 0
+opcache.save_comments = 1
+opcache.jit_buffer_size = 256M
+opcache.jit = tracing
+EOF
+
+sudo tee "/etc/php/$PHP_VERSION/cli/conf.d/99-production.ini" > /dev/null <<'EOF'
+memory_limit = 2G
+max_input_vars = 5000
+date.timezone = UTC
+zend.assertions = -1
+opcache.save_comments = 1
+expose_php = Off
+realpath_cache_size = 10M
+realpath_cache_ttl = 7200
+EOF
+```
+
+`opcache.validate_timestamps = 0` means PHP never checks whether code files have changed. This is the correct production setting, but after every deployment you must restart PHP-FPM (`sudo systemctl restart php8.5-fpm`), or the old code keeps running.
+
+#### PHP-FPM pool
+
+The pool settings go into a separate file, `zz-tuning.conf`, and the package's own `www.conf` is left untouched. Both files define the same `[www]` pool, and PHP-FPM reads them in alphabetical order, so the values in `zz-tuning.conf` win. Because `www.conf` is never edited, a PHP package upgrade can update it without stopping to ask which version to keep, and the tuning survives the upgrade.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${PHP_VERSION:?Run the Variables blocks first}"
+: "${PHP_MAX_CHILDREN:?Run the Resource sizing block first}"
+sudo tee "/etc/php/$PHP_VERSION/fpm/pool.d/zz-tuning.conf" > /dev/null <<EOF
+; Overrides for the [www] pool defined in www.conf
+[www]
+pm = dynamic
+pm.max_children = $PHP_MAX_CHILDREN
+pm.start_servers = $PHP_START_SERVERS
+pm.min_spare_servers = $PHP_MIN_SPARE
+pm.max_spare_servers = $PHP_MAX_SPARE
+pm.max_requests = 500
+request_terminate_timeout = 600
+EOF
+
+# -tt prints the effective configuration, which confirms the overrides are in use
+sudo "php-fpm$PHP_VERSION" -tt 2>&1 | grep -E "(pm(\.(max_children|start_servers|min_spare_servers|max_spare_servers|max_requests))?|request_terminate_timeout) = "
+sudo systemctl enable --now "php$PHP_VERSION-fpm"
+sudo systemctl restart "php$PHP_VERSION-fpm"
+```
+
+`pm.max_requests = 500` recycles each worker after 500 requests, which protects the server from slow memory leaks in application code.
+
+### Nginx
+
+Run this section on the app server only (`INSTALL_APP=yes`).
+
+Nginx comes from Ubuntu 26.04's own repository (version 1.28), so it receives Ubuntu's security updates. Magento 2.4.9 lists Nginx 1.30, and 1.28 is the version Magento 2.4.8 lists. If Magento's `nginx.conf.sample` ever fails `nginx -t` on 1.28, that is the point to revisit this choice.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+sudo apt install -y nginx
+sudo systemctl enable --now nginx
+nginx -v
+```
+
+Ubuntu's Nginx runs as `www-data`, the same account as PHP-FPM, and already ships the `snippets/fastcgi-php.conf` file that the PHP blocks below include. Each site (vhost) follows Ubuntu's convention: its file goes in `/etc/nginx/sites-available/`, and a link in `/etc/nginx/sites-enabled/` turns it on, so you can disable a site by removing its link without deleting its configuration. Settings that apply to every site, such as the two blocks below, go in `/etc/nginx/conf.d/`. Ubuntu's `nginx.conf` loads both folders, so the package's own files are never edited.
+
+Global settings: hide the Nginx version, allow 64 MB uploads, and trust the visitor IP address forwarded by Varnish, the HTTPS proxy, and (with `SSL_MODE=off`) the load balancer ranges in `TRUSTED_PROXY_CIDRS`. The `map` lets PHP know when the original request used HTTPS.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${SSL_MODE:?Run the Variables blocks first}"
+sudo tee /etc/nginx/conf.d/00-server.conf > /dev/null <<'EOF'
+server_tokens off;
+client_max_body_size 64m;
+
+# Real visitor IP: requests reach the application through Varnish on 127.0.0.1
+set_real_ip_from 127.0.0.1;
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+
+# Tell PHP when the visitor connected over HTTPS (TLS ends at the :443 proxy or the load balancer)
+map $http_x_forwarded_proto $fe_https {
+    default off;
+    https   on;
+}
+EOF
+if [ "$SSL_MODE" = off ]; then
+  for CIDR in $TRUSTED_PROXY_CIDRS; do
+    echo "set_real_ip_from $CIDR;" | sudo tee -a /etc/nginx/conf.d/00-server.conf > /dev/null
+  done
+fi
+grep set_real_ip_from /etc/nginx/conf.d/00-server.conf
+```
+
+Define the PHP-FPM upstream under the name `fastcgi_backend`. Magento's own Nginx configuration (`nginx.conf.sample`) sends PHP requests to an upstream with exactly that name, so defining it here lets you switch to Magento's configuration later without further changes.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${PHP_VERSION:?Run the Variables blocks first}"
+sudo tee /etc/nginx/conf.d/01-php-fpm.conf > /dev/null <<EOF
+upstream fastcgi_backend {
+    server unix:/run/php/php$PHP_VERSION-fpm.sock;
+}
+EOF
+```
+
+Disable the default site. It listens on port 80, which Varnish or the application vhost will take over. This removes only the link in `sites-enabled`; the package's file in `sites-available` stays in place.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+sudo rm -f /etc/nginx/sites-enabled/default
+```
+
+#### Application vhost
+
+With Varnish, the application vhost listens on `127.0.0.1:8080` only, so all public traffic must pass through Varnish. Without Varnish (`INSTALL_VARNISH=no`), it listens on port 80 directly. It serves the web root with PHP and is deliberately generic; replace it with your application's own Nginx configuration when you deploy the application. For Magento, the **Magento 2.4.9 configuration** section switches it to Magento's `nginx.conf.sample`.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
+: "${PHP_VERSION:?Run the Variables blocks first}"
+VHOST_LISTEN="127.0.0.1:8080"
+[ "$INSTALL_VARNISH" = no ] && VHOST_LISTEN="80"
+sudo mkdir -p /var/www/letsencrypt
+sudo tee "/etc/nginx/sites-available/$DOMAIN_NAME" > /dev/null <<EOF
+server {
+    listen $VHOST_LISTEN;
+    server_name $DOMAIN_NAME www.$DOMAIN_NAME;
+
+    root /var/www/$DOMAIN_NAME;
+    index index.php index.html;
+
+    # Let's Encrypt HTTP challenge
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+
+    location ~ \.php\$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_param HTTPS \$fe_https;
+        fastcgi_pass fastcgi_backend;
+        fastcgi_read_timeout 600s;
+        fastcgi_buffers 16 16k;
+        fastcgi_buffer_size 32k;
+    }
+
+    # Block hidden files such as .git and .env
+    location ~ /\.(?!well-known) {
+        deny all;
+    }
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+}
+EOF
+sudo ln -sf "/etc/nginx/sites-available/$DOMAIN_NAME" "/etc/nginx/sites-enabled/$DOMAIN_NAME"
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### Valkey
 
 Run this section on the app server when `INSTALL_VALKEY=yes`.
 
@@ -757,6 +820,7 @@ Ubuntu 26.04 ships Valkey 9, the version Magento 2.4.9 supports, so Valkey comes
 In a single instance, the cache's eviction policy would also delete active sessions under memory pressure, logging customers out. Both instances use the package's `valkey-server@` service template with configuration files of their own, so the package's default instance is disabled and its `valkey.conf` is left untouched.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VALKEY" = yes ] || { echo "Skip this block: this server does not run Valkey."; exit 1; }
 sudo apt install -y valkey-server
 sudo systemctl disable --now valkey-server
 valkey-server --version
@@ -765,6 +829,7 @@ valkey-server --version
 This block writes both configuration files with one generated password and the memory sizes from the sizing block, then starts both instances. Both listen on `127.0.0.1` only. The files belong to the `valkey` user with mode `640`, so no other unprivileged account can read the password. Running the block again sets a new password.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VALKEY" = yes ] || { echo "Skip this block: this server does not run Valkey."; exit 1; }
 : "${VALKEY_CACHE_MB:?Run the Resource sizing block first}"
 VALKEY_PASSWORD="$(openssl rand -hex 32)"
 write_valkey_conf() {
@@ -798,6 +863,7 @@ echo "Valkey password: $VALKEY_PASSWORD"
 Verify both instances. The first command should fail with `NOAUTH Authentication required`. Each instance should then report its port, Valkey version 9, and its eviction policy.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VALKEY" = yes ] || { echo "Skip this block: this server does not run Valkey."; exit 1; }
 VALKEY_PASSWORD="$(sudo awk '/^requirepass/{print $2}' /etc/valkey/valkey-cache.conf)"
 valkey-cli -p 6379 ping
 for PORT in 6379 6380; do
@@ -808,22 +874,24 @@ done
 
 Both instances read only their own configuration files, so a Valkey package upgrade leaves the settings alone. A package upgrade may not restart instances started from the template, so restart both afterwards to make sure they run the new version: `sudo systemctl restart valkey-server@cache valkey-server@session`.
 
-## Varnish
+### Varnish
 
 Run this section on the app server when `INSTALL_VARNISH=yes`.
 
 Magento 2.4.9 lists Varnish 8, but Varnish's official repository has no Ubuntu 26.04 build of Varnish 8 yet, and Ubuntu 26.04 ships Varnish 7.7. This section therefore installs Ubuntu's 7.7, which is the version Magento 2.4.8 lists. Magento exports the same VCL for Varnish 7.x and 8, so nothing else changes, and **Moving to Varnish 8** below covers the upgrade once a 26.04 package exists.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
 sudo apt install -y varnish
 varnishd -V
 ```
 
-### Varnish on port 80
+#### Varnish on port 80
 
 This block takes the package's own start command and changes only the listening port (to 80) and the cache size, so every other packaged option stays intact. It also raises three limits, following Adobe's guidance: Magento sends long `X-Magento-Tags` headers on category pages, and with Varnish's defaults (8 KB of headers) these pages fail with "503 Backend fetch failed". The package's default VCL already forwards requests to Nginx on `127.0.0.1:8080`. Once Magento's VCL has been installed as `/etc/varnish/magento.vcl` (see the **Magento 2.4.9 configuration** section), this block points Varnish at that file instead, so running it again never switches Varnish back to the default VCL. The settings live in a systemd drop-in file, and the package's own `default.vcl` is never edited, so both survive package upgrades.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
 : "${VARNISH_CACHE_MB:?Run the Resource sizing block first}"
 VCL=/etc/varnish/default.vcl
 [ -f /etc/varnish/magento.vcl ] && VCL=/etc/varnish/magento.vcl
@@ -842,6 +910,7 @@ echo "$EXEC" | grep -q -- "-a :80" || { echo "Could not set port 80. Check: syst
 Confirm that Varnish is answering on port 80. The response code may be 403 or 404 because the web root is still empty, which is fine; the important part is that the headers include `Via` with `varnish`.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
 sleep 2
 sudo ss -tlnp | grep -E ':(80|8080)\b'
 curl -sI -H "Host: ${DOMAIN_NAME:-localhost}" http://127.0.0.1/ | grep -iE '^(HTTP|via|x-varnish)'
@@ -849,17 +918,19 @@ curl -sI -H "Host: ${DOMAIN_NAME:-localhost}" http://127.0.0.1/ | grep -iE '^(HT
 
 The packaged VCL is conservative and does not cache pages for visitors with cookies, so Varnish behaves almost like a pass-through proxy until you install your application's own VCL (for Magento, see the **Magento 2.4.9 configuration** section). Do not add an HTTP-to-HTTPS redirect in Nginx while this VCL is active, because the default VCL does not include the scheme in its cache key and would serve the cached redirect to HTTPS visitors too, causing a redirect loop. Handle that redirect in the application's VCL instead.
 
-### Moving to Varnish 8
+#### Moving to Varnish 8
 
 This command checks whether Varnish's official repository has added Ubuntu 26.04 (`resolute`). It prints `200` once it has, and `404` until then.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
 curl -s -o /dev/null -w '%{http_code}\n' https://packagecloud.io/varnishcache/varnish80/ubuntu/dists/resolute/Release
 ```
 
 Once it prints `200`, this block adds the repository, pins Varnish to it so that Ubuntu's 7.7 is never chosen again, and upgrades. Afterwards, run the **Varnish on port 80** block again, so the drop-in is rebuilt from the new package's start command. It keeps using Magento's VCL if that is installed.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
 curl -s https://packagecloud.io/install/repositories/varnishcache/varnish80/script.deb.sh | sudo bash
 sudo tee /etc/apt/preferences.d/varnish-pin > /dev/null <<'EOF'
 Package: varnish varnish-*
@@ -872,11 +943,12 @@ sudo apt install -y varnish
 varnishd -V
 ```
 
-## Composer
+### Composer
 
 Run this section on the app server only (`INSTALL_APP=yes`). It uses Composer's official installer, which verifies the download's signature before installing. `--2` installs the latest stable 2.x release, which is 2.10 or later, as Magento 2.4.9 requires. (Ubuntu 26.04's own `composer` package is 2.9, which is too old.)
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
 cd /tmp
 EXPECTED="$(curl -fsSL https://composer.github.io/installer.sig)"
 curl -fsSL https://getcomposer.org/installer -o composer-setup.php
@@ -892,7 +964,7 @@ rm -f composer-setup.php
 
 To pin an exact version instead, replace `--2` with `--version=2.10.3` (or the version you need).
 
-## phpMyAdmin
+### phpMyAdmin
 
 Run this section on the app server when `INSTALL_PHPMYADMIN=yes`. It manages the local MariaDB or, when the database runs on its own server, the MariaDB at `DB_SERVER_IP`.
 
@@ -901,12 +973,14 @@ phpMyAdmin is installed on `127.0.0.1:8090`, which is not reachable from the int
 Change the version below to the latest release from [phpmyadmin.net](https://www.phpmyadmin.net/downloads/). phpMyAdmin 5.2.3 is officially tested only up to PHP 8.3, but it is the same version Ubuntu 26.04 packages for its PHP 8.5, and it works there, though it may log deprecation notices. Move to a newer release once one supports PHP 8.5 officially.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_PHPMYADMIN" = yes ] || { echo "Skip this block: this server does not run phpMyAdmin."; exit 1; }
 export PMA_VERSION="5.2.3"
 ```
 
 The download is verified against phpMyAdmin's published SHA-256 checksum before anything is installed. To upgrade phpMyAdmin later, change the version above and run this block again. It keeps the existing `config.inc.php`, so the configuration and login secret survive the upgrade.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_PHPMYADMIN" = yes ] || { echo "Skip this block: this server does not run phpMyAdmin."; exit 1; }
 : "${PMA_VERSION:?Run the previous block first}"
 cd /tmp
 F="phpMyAdmin-$PMA_VERSION-english"
@@ -933,7 +1007,8 @@ rm -f "$F.tar.gz" "$F.tar.gz.sha256"
 Write the configuration with a generated encryption secret. It connects to the local MariaDB, or to `DB_SERVER_IP` when the database runs on its own server.
 
 ```bash
-: "${INSTALL_MARIADB:?Run the Variables block first}"
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_PHPMYADMIN" = yes ] || { echo "Skip this block: this server does not run phpMyAdmin."; exit 1; }
+: "${INSTALL_MARIADB:?Run the Variables blocks first}"
 PMA_DB_HOST="localhost"
 [ "$INSTALL_MARIADB" = no ] && PMA_DB_HOST="$DB_SERVER_IP"
 SECRET="$(openssl rand -hex 32)"
@@ -959,6 +1034,7 @@ sudo chmod 640 /usr/share/phpmyadmin/config.inc.php
 Create the HTTP Basic Auth user with a generated password:
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_PHPMYADMIN" = yes ] || { echo "Skip this block: this server does not run phpMyAdmin."; exit 1; }
 PMA_AUTH_PASSWORD="$(openssl rand -hex 16)"
 sudo mkdir -p /etc/nginx/htpasswds
 echo "$PMA_AUTH_PASSWORD" | sudo htpasswd -ciB /etc/nginx/htpasswds/.phpmyadmin dbadmin
@@ -971,7 +1047,8 @@ echo "phpMyAdmin Basic Auth password: $PMA_AUTH_PASSWORD"
 Create the Nginx site for phpMyAdmin:
 
 ```bash
-: "${PHP_VERSION:?Run the Variables block first}"
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_PHPMYADMIN" = yes ] || { echo "Skip this block: this server does not run phpMyAdmin."; exit 1; }
+: "${PHP_VERSION:?Run the Variables blocks first}"
 sudo tee /etc/nginx/sites-available/phpmyadmin > /dev/null <<EOF
 server {
     listen 127.0.0.1:8090;
@@ -1016,25 +1093,27 @@ ssh -i ~/.ssh/YOUR_KEY.pem -N -L 8090:127.0.0.1:8090 ubuntu@SERVER_IP
 
 Log in with the application database user created in the MariaDB section. The MariaDB root account uses Unix socket authentication and cannot log in through phpMyAdmin, which is intentional. When the database runs on its own server, the login works because the MariaDB section created the user for this app server's address.
 
-## HTTPS
+### HTTPS
 
 Run this section on the app server when `SSL_MODE` is `letsencrypt` or `custom`. Nginx terminates HTTPS on port 443 and passes requests to port 80 (Varnish, or the application vhost when Varnish is not installed). First get the certificate with option A or B, then set up the HTTPS vhost.
 
 Skip this whole section when `SSL_MODE=off`. The load balancer then handles HTTPS and must forward the `X-Forwarded-Proto` header, so that the application knows the visitor used HTTPS. An AWS Application Load Balancer does this automatically.
 
-### Option A: Let's Encrypt certificate (`SSL_MODE=letsencrypt`)
+#### Option A: Let's Encrypt certificate (`SSL_MODE=letsencrypt`)
 
 Run this only after the domain's DNS points to this server and port 80 is open in the security group.
 
 ```bash
-dig +short "${DOMAIN_NAME:?Run the Variables block first}"
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$SSL_MODE" = letsencrypt ] || { echo "Skip this block: it is for SSL_MODE=letsencrypt, and this server has SSL_MODE=$SSL_MODE."; exit 1; }
+dig +short "${DOMAIN_NAME:?Run the Variables blocks first}"
 curl -s https://checkip.amazonaws.com
 ```
 
 The two addresses above must match. If they do, request the certificate:
 
 ```bash
-: "${DOMAIN_NAME:?Run the Variables block first}"
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$SSL_MODE" = letsencrypt ] || { echo "Skip this block: it is for SSL_MODE=letsencrypt, and this server has SSL_MODE=$SSL_MODE."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
 sudo apt install -y certbot
 sudo certbot certonly --webroot -w /var/www/letsencrypt \
   -d "$DOMAIN_NAME" \
@@ -1047,14 +1126,16 @@ To include `www`, add `-d "www.$DOMAIN_NAME"` to the command, but only once DNS 
 Certificates renew automatically through the `certbot.timer` service. After the HTTPS vhost below is in place, this command tests renewal without changing anything:
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$SSL_MODE" = letsencrypt ] || { echo "Skip this block: it is for SSL_MODE=letsencrypt, and this server has SSL_MODE=$SSL_MODE."; exit 1; }
 sudo certbot renew --dry-run
 ```
 
-### Option B: your own certificate (`SSL_MODE=custom`)
+#### Option B: your own certificate (`SSL_MODE=custom`)
 
 Copy the certificate and its private key to the server first. The certificate file must contain the full chain (your certificate followed by any intermediate certificates); a Cloudflare Origin Certificate is a single certificate and needs no chain. Then set the two paths when Runme asks:
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$SSL_MODE" = custom ] || { echo "Skip this block: it is for SSL_MODE=custom, and this server has SSL_MODE=$SSL_MODE."; exit 1; }
 export SSL_CERT_PATH="/etc/ssl/certs/example.com.pem"
 export SSL_KEY_PATH="/etc/ssl/private/example.com.key"
 ```
@@ -1062,6 +1143,7 @@ export SSL_KEY_PATH="/etc/ssl/private/example.com.key"
 This block locks down the private key, so that only root can read it, and checks that the key belongs to the certificate. The two fingerprints it prints must be identical.
 
 ```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$SSL_MODE" = custom ] || { echo "Skip this block: it is for SSL_MODE=custom, and this server has SSL_MODE=$SSL_MODE."; exit 1; }
 : "${SSL_CERT_PATH:?Run the previous block first}"
 sudo chown root:root "$SSL_CERT_PATH" "$SSL_KEY_PATH"
 sudo chmod 644 "$SSL_CERT_PATH"
@@ -1073,12 +1155,13 @@ sudo openssl x509 -noout -subject -enddate -in "$SSL_CERT_PATH"
 
 The last line shows the certificate's expiry date. A custom certificate does not renew itself, so note the date and replace the files (then run `sudo systemctl reload nginx`) before it expires.
 
-### HTTPS vhost
+#### HTTPS vhost
 
 This block uses the Let's Encrypt certificate with option A, or the paths from option B.
 
 ```bash
-: "${DOMAIN_NAME:?Run the Variables block first}"
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$SSL_MODE" != off ] || { echo "Skip this block: it is for an app server that handles HTTPS, and this server has INSTALL_APP=$INSTALL_APP, SSL_MODE=$SSL_MODE."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
 if [ "$SSL_MODE" = letsencrypt ]; then
   SSL_CERT_PATH="/etc/letsencrypt/live/$DOMAIN_NAME/fullchain.pem"
   SSL_KEY_PATH="/etc/letsencrypt/live/$DOMAIN_NAME/privkey.pem"
@@ -1121,14 +1204,18 @@ sudo nginx -t && sudo systemctl reload nginx
 
 If you use Cloudflare in front of the server, set Cloudflare's SSL mode to **Full (strict)**, and use either option A or a Cloudflare Origin Certificate with option B. Avoid Cloudflare's **Flexible** mode with `SSL_MODE=off`: in that mode, traffic between Cloudflare and this server crosses the internet unencrypted.
 
-## Security hardening
+## Part 5: Every server, to finish
 
-### Firewall (UFW)
+Run this part on every server once the earlier parts that apply to it are done. It locks the server down and then checks that each of its services is running.
+
+### Security hardening
+
+#### Firewall (UFW)
 
 This block runs on every server and opens only what the server's services need. SSH is allowed before the firewall is enabled, so the current session is not cut off. The app server opens HTTP and HTTPS to everyone, except with `SSL_MODE=off`: it then keeps 443 closed and, when `TRUSTED_PROXY_CIDRS` is set, accepts port 80 from those ranges only. A database or OpenSearch server opens its port only to the addresses in `APP_SERVER_IPS`.
 
 ```bash
-: "${INSTALL_APP:?Run the Variables block first}"
+: "${INSTALL_APP:?Run the Variables blocks first}"
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw allow OpenSSH
@@ -1152,7 +1239,7 @@ sudo ufw status verbose
 
 Never open 8080 (Nginx behind Varnish), 8090 (phpMyAdmin), or 6379 and 6380 (Valkey), which listen on `127.0.0.1` only. Never open 3306 (MariaDB) or 9200 (OpenSearch) to anything other than the app servers.
 
-### SSH hardening
+#### SSH hardening
 
 This block disables password logins and root logins, so every account must use an SSH key. Keep your current SSH session open while you run it, and test a new login from a second terminal before you close the first one.
 
@@ -1176,7 +1263,7 @@ Check the output above. It must show `permitrootlogin no` and `passwordauthentic
 sudo systemctl restart ssh
 ```
 
-### Fail2ban
+#### Fail2ban
 
 Fail2ban temporarily blocks IP addresses that repeatedly fail to log in over SSH.
 
@@ -1192,12 +1279,20 @@ backend  = systemd
 [sshd]
 enabled = true
 EOF
-sudo systemctl enable --now fail2ban
+sudo systemctl enable fail2ban
 sudo systemctl restart fail2ban
-sudo fail2ban-client status sshd
+# Fail2ban takes a few seconds to open its control socket after a restart
+for i in $(seq 1 30); do sudo fail2ban-client ping > /dev/null 2>&1 && break; sleep 1; done
+if sudo fail2ban-client ping > /dev/null 2>&1; then
+  sudo fail2ban-client status sshd
+else
+  echo "ERROR: fail2ban did not start. Its recent log follows."
+  sudo journalctl -u fail2ban -n 30 --no-pager
+  false
+fi
 ```
 
-### Automatic security updates
+#### Automatic security updates
 
 This enables Ubuntu's unattended security updates on every server. By default, they cover Ubuntu's own packages only. PHP, Nginx, Valkey, and Varnish come from Ubuntu and therefore receive security fixes automatically, while MariaDB and OpenSearch come from their vendors' repositories and are never upgraded behind your back.
 
@@ -1207,12 +1302,12 @@ sudo dpkg-reconfigure -f noninteractive unattended-upgrades
 systemctl is-enabled unattended-upgrades
 ```
 
-## Final verification
+### Final verification
 
 Every service on this server should report `active`:
 
 ```bash
-: "${INSTALL_APP:?Run the Variables block first}"
+: "${INSTALL_APP:?Run the Variables blocks first}"
 SERVICES="fail2ban"
 [ "$INSTALL_APP" = yes ]        && SERVICES="$SERVICES nginx php$PHP_VERSION-fpm"
 [ "$INSTALL_MARIADB" = yes ]    && SERVICES="$SERVICES mariadb"
@@ -1227,7 +1322,7 @@ done
 On an app server whose database or OpenSearch runs elsewhere, check that those servers are reachable. Each line should report `reachable`. If one does not, check the other server's security group, its firewall rules, and its `APP_SERVER_IPS` value.
 
 ```bash
-: "${INSTALL_APP:?Run the Variables block first}"
+: "${INSTALL_APP:?Run the Variables blocks first}"
 if [ "$INSTALL_MARIADB" = no ] && [ -n "$DB_SERVER_IP" ]; then
   if timeout 5 bash -c "</dev/tcp/$DB_SERVER_IP/3306" 2>/dev/null; then
     echo "MariaDB at $DB_SERVER_IP:3306 is reachable"
@@ -1250,16 +1345,20 @@ Check the listening ports. On the app server, only 22, 80, and 443 (443 only whe
 sudo ss -tlnp | awk 'NR==1 || /LISTEN/' | awk '{print $4, $6}' | column -t
 ```
 
-## Magento 2.4.9 configuration
+## Part 6: App server, after Magento is deployed
+
+Run this part on the app server only after Magento's code has been deployed to the web root, which this runbook does not do. The server is complete without it until then.
+
+### Magento 2.4.9 configuration
 
 Run this section on the app server only after Magento's code has been deployed into the web root, because each block uses files that come with Magento. Skip it for any other application.
 
-### Connection settings for Magento
+#### Connection settings for Magento
 
 This block prints the connection options for Magento's `bin/magento setup:install` command, filled in for this server's layout. The cache, session, and page cache options are also accepted by `bin/magento setup:config:set`, which applies them to an existing installation. Replace the three `<...>` placeholders with the database values from the MariaDB section.
 
 ```bash
-: "${INSTALL_APP:?Run the Variables block first}"
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
 APP_DB_HOST="localhost"
 [ "$INSTALL_MARIADB" = no ] && APP_DB_HOST="$DB_SERVER_IP"
 APP_OS_HOST="127.0.0.1"
@@ -1279,12 +1378,13 @@ if [ "$INSTALL_VARNISH" = yes ]; then echo "--http-cache-hosts=127.0.0.1:80"; fi
 
 Magento talks to Valkey through its `redis` backend, because Valkey uses the same protocol. Clear the cell output after copying the options, because they include the Valkey password.
 
-### Magento's Nginx configuration
+#### Magento's Nginx configuration
 
 Magento ships its own Nginx rules in `nginx.conf.sample`, which serve the store from the `pub` folder and block access to Magento's internal files. This block copies that file to `/etc/nginx/snippets/magento.conf`, owned by root, rather than including it from the web root, so that the account that deploys code cannot change Nginx's configuration. It then replaces the generic vhost with one that uses Magento's rules. Run it again after every Magento upgrade, in case the sample file has changed.
 
 ```bash
-: "${DOMAIN_NAME:?Run the Variables block first}"
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
 WEB_ROOT="/var/www/$DOMAIN_NAME"
 VHOST_LISTEN="127.0.0.1:8080"
 [ "$INSTALL_VARNISH" = no ] && VHOST_LISTEN="80"
@@ -1313,12 +1413,13 @@ else
 fi
 ```
 
-### Magento's VCL for Varnish
+#### Magento's VCL for Varnish
 
 Run this block when `INSTALL_VARNISH=yes`. It switches Magento's full-page cache to Varnish, exports Magento's VCL for Varnish 7 (which also runs on Varnish 8) pointed at Nginx on `127.0.0.1:8080`, and allows cache purges only from this server. The VCL is saved as `/etc/varnish/magento.vcl`, leaving the package's own `default.vcl` untouched, so a Varnish upgrade never asks which version to keep. It is checked by compiling it first, so a faulty VCL never reaches the running Varnish, and then the systemd drop-in is pointed at it. Varnish restarts to load it, which empties the cache once. Magento's VCL checks the backend's health through `/health_check.php`, which Magento's Nginx rules serve.
 
 ```bash
-: "${DOMAIN_NAME:?Run the Variables block first}"
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
 cd "/var/www/$DOMAIN_NAME"
 sudo -u "$WEB_USER" php bin/magento config:set system/full_page_cache/caching_application 2
 sudo -u "$WEB_USER" php bin/magento setup:config:set --http-cache-hosts=127.0.0.1:80 --no-interaction
@@ -1336,12 +1437,13 @@ fi
 rm -f /tmp/magento.vcl
 ```
 
-### Cron
+#### Cron
 
 Magento needs its cron jobs for indexing, emails, and scheduled tasks. This installs them in the restricted user's crontab, so they run with the same permissions as the code.
 
 ```bash
-: "${DOMAIN_NAME:?Run the Variables block first}"
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
 cd "/var/www/$DOMAIN_NAME"
 sudo -u "$WEB_USER" php bin/magento cron:install
 sudo crontab -u "$WEB_USER" -l
