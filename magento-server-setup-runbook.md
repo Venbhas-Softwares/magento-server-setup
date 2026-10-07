@@ -54,7 +54,42 @@ On a single server, no other port needs to be open, because MariaDB, OpenSearch,
 
 ## Part 1: Every server, first
 
-Run this part on every server before anything else. It records what this server runs, calculates the memory for each of its services, and brings Ubuntu up to date. Every later part depends on it, which is why it comes first even though it is not specific to any one server.
+Run this part on every server before anything else. It brings Ubuntu up to date, records what this server runs, and calculates the memory for each of its services. Every later part depends on it, which is why it comes first even though it is not specific to any one server.
+
+### System update and base packages
+
+Confirm that the server runs Ubuntu 26.04 LTS. Every repository and package name in this runbook is chosen for that release.
+
+```bash
+. /etc/os-release
+echo "$PRETTY_NAME"
+if [ "$VERSION_ID" != "26.04" ]; then echo "WARNING: this runbook is written for Ubuntu 26.04 LTS, not $VERSION_ID."; fi
+```
+
+```bash
+sudo apt update
+sudo apt full-upgrade -y
+sudo apt install -y ca-certificates curl gnupg git unzip apache2-utils
+sudo timedatectl set-timezone UTC
+```
+
+Kernel settings: OpenSearch needs a higher memory map limit, and Valkey needs memory overcommit enabled to save its data safely. Both settings are harmless on a server that runs neither, so this block runs on every server.
+
+```bash
+printf 'vm.max_map_count = 262144\nvm.overcommit_memory = 1\n' | sudo tee /etc/sysctl.d/99-server.conf
+sudo sysctl --system > /dev/null
+sysctl vm.max_map_count vm.overcommit_memory
+```
+
+If the update installed a new kernel, reboot now, before any values are set. A reboot ends the Runme session and clears every variable, which is why this section comes first. Reconnect afterwards and continue with the **Variables** blocks.
+
+```bash
+if [ -f /var/run/reboot-required ]; then echo "Reboot required"; else echo "No reboot needed"; fi
+```
+
+```bash
+sudo reboot
+```
 
 ### Variables
 
@@ -64,10 +99,24 @@ The variables are split into three blocks, so that each server is asked only for
 
 Run this block on every server. Each value is `yes` or `no` and chooses which of the main services this server runs. `INSTALL_APP` covers Nginx, PHP-FPM, and Composer.
 
+Each block in this section checks its values when it runs. If a required value is missing or invalid, the block stops with an error and Runme keeps none of its values, so run the block again with corrected values.
+
 ```bash
 export INSTALL_APP="yes"
 export INSTALL_MARIADB="yes"
 export INSTALL_OPENSEARCH="yes"
+
+OK=yes
+for PAIR in "INSTALL_APP=$INSTALL_APP" "INSTALL_MARIADB=$INSTALL_MARIADB" "INSTALL_OPENSEARCH=$INSTALL_OPENSEARCH"; do
+  case "${PAIR#*=}" in
+    yes|no) ;;
+    *) echo "ERROR: ${PAIR%%=*} must be yes or no, not '${PAIR#*=}'."; OK=no ;;
+  esac
+done
+if [ "$OK" = yes ] && [ "$INSTALL_APP$INSTALL_MARIADB$INSTALL_OPENSEARCH" = nonono ]; then
+  echo "ERROR: At least one of INSTALL_APP, INSTALL_MARIADB, and INSTALL_OPENSEARCH must be yes."; OK=no
+fi
+if [ "$OK" = yes ]; then echo "Server role saved."; else exit 1; fi
 ```
 
 #### App server settings
@@ -102,15 +151,59 @@ export OPENSEARCH_SERVER_IP=""
 
 export SSL_MODE="letsencrypt"
 export TRUSTED_PROXY_CIDRS=""
+
+OK=yes
+IPV4='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+fail() { echo "ERROR: $1"; OK=no; }
+if [ -z "$DOMAIN_NAME" ] || [ "$DOMAIN_NAME" = example.com ]; then
+  fail "DOMAIN_NAME is required. Enter this site's domain, not example.com."
+elif ! [[ "$DOMAIN_NAME" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+  fail "DOMAIN_NAME '$DOMAIN_NAME' is not a valid domain name."
+fi
+[[ "$WEB_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "WEB_USER '$WEB_USER' is not a valid Linux user name (lowercase letters, digits, - and _)."
+[ "$PHP_VERSION" = 8.5 ] || fail "PHP_VERSION must be 8.5, not '$PHP_VERSION'."
+for PAIR in "INSTALL_VALKEY=$INSTALL_VALKEY" "INSTALL_VARNISH=$INSTALL_VARNISH" "INSTALL_PHPMYADMIN=$INSTALL_PHPMYADMIN"; do
+  case "${PAIR#*=}" in
+    yes|no) ;;
+    *) fail "${PAIR%%=*} must be yes or no, not '${PAIR#*=}'." ;;
+  esac
+done
+case "$SSL_MODE" in
+  letsencrypt)
+    if ! [[ "$ADMIN_EMAIL" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[A-Za-z]{2,}$ ]] || [ "$ADMIN_EMAIL" = admin@example.com ]; then
+      fail "ADMIN_EMAIL is required with SSL_MODE=letsencrypt. Enter a real address, not admin@example.com."
+    fi ;;
+  custom|off) ;;
+  *) fail "SSL_MODE must be letsencrypt, custom, or off, not '$SSL_MODE'." ;;
+esac
+if [ "$INSTALL_MARIADB" = no ] && [ -z "$DB_SERVER_IP" ]; then
+  fail "DB_SERVER_IP is required, because MariaDB runs on another server. Enter that server's private IP address."
+fi
+for PAIR in "DB_SERVER_IP=$DB_SERVER_IP" "OPENSEARCH_SERVER_IP=$OPENSEARCH_SERVER_IP"; do
+  if [ -n "${PAIR#*=}" ] && ! [[ "${PAIR#*=}" =~ $IPV4 ]]; then fail "${PAIR%%=*} '${PAIR#*=}' is not an IPv4 address."; fi
+done
+for CIDR in $TRUSTED_PROXY_CIDRS; do
+  [[ "$CIDR" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || fail "'$CIDR' in TRUSTED_PROXY_CIDRS is not an address range such as 10.0.0.0/16."
+done
+if [ "$OK" = yes ]; then echo "App server settings saved."; else exit 1; fi
 ```
 
 #### Database and OpenSearch server settings
 
-Run this block on a server that runs MariaDB or OpenSearch for app servers elsewhere. Skip it when everything runs on one server. `APP_SERVER_IPS` lists the private IP addresses of the app servers that may connect, separated by spaces. Only these addresses are let through the firewall and given a database login.
+Run this block on a server that runs MariaDB or OpenSearch for app servers elsewhere. Skip it when everything runs on one server. `APP_SERVER_IPS` lists the private IP addresses of the app servers that may connect, separated by spaces, and it is required on a server that does not run the app. Only these addresses are let through the firewall to MariaDB (port 3306) or OpenSearch (port 9200). On a MariaDB server, they are also the only addresses given a database login. OpenSearch has no login of its own, so on an OpenSearch server the firewall and the AWS security group are what keep everyone else out.
 
 ```bash
 [ "${INSTALL_MARIADB:?Run the Server role block first}" = yes ] || [ "$INSTALL_OPENSEARCH" = yes ] || { echo "Skip this block: this server runs neither MariaDB nor OpenSearch."; exit 1; }
 export APP_SERVER_IPS=""
+
+OK=yes
+if [ "$INSTALL_APP" = no ] && [ -z "$APP_SERVER_IPS" ]; then
+  echo "ERROR: APP_SERVER_IPS is required on a server that does not run the app. Enter the private IP address of each app server."; OK=no
+fi
+for IP in $APP_SERVER_IPS; do
+  [[ "$IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo "ERROR: '$IP' in APP_SERVER_IPS is not an IPv4 address."; OK=no; }
+done
+if [ "$OK" = yes ]; then echo "Database and OpenSearch server settings saved."; else exit 1; fi
 ```
 
 For example, with an app server at `10.0.1.10`, a database server at `10.0.1.20`, and an OpenSearch server at `10.0.1.30`, each server runs these blocks with these values (every value not shown keeps its default):
@@ -271,8 +364,7 @@ if [ "$ROLE_OK" = yes ]; then
   fi
 
   echo
-  echo "Sections to run on this server:"
-  echo "  Part 1: System update and base packages"
+  echo "Sections still to run on this server:"
   [ "$INSTALL_MARIADB" = yes ]    && echo "  Part 2: MariaDB"
   [ "$INSTALL_OPENSEARCH" = yes ] && echo "  Part 3: OpenSearch"
   [ "$INSTALL_APP" = yes ]        && echo "  Part 4: Restricted user and web root, PHP, Nginx"
@@ -289,41 +381,6 @@ else
   unset PHP_MAX_CHILDREN PHP_START_SERVERS PHP_MIN_SPARE PHP_MAX_SPARE
   echo "Fix the values above in the Variables blocks, then run those blocks and the Resource sizing block again."
 fi
-```
-
-### System update and base packages
-
-Confirm that the server runs Ubuntu 26.04 LTS. Every repository and package name in this runbook is chosen for that release.
-
-```bash
-. /etc/os-release
-echo "$PRETTY_NAME"
-if [ "$VERSION_ID" != "26.04" ]; then echo "WARNING: this runbook is written for Ubuntu 26.04 LTS, not $VERSION_ID."; fi
-```
-
-```bash
-sudo apt update
-sudo apt full-upgrade -y
-sudo apt install -y ca-certificates curl gnupg git unzip apache2-utils
-sudo timedatectl set-timezone UTC
-```
-
-Kernel settings: OpenSearch needs a higher memory map limit, and Valkey needs memory overcommit enabled to save its data safely. Both settings are harmless on a server that runs neither, so this block runs on every server.
-
-```bash
-printf 'vm.max_map_count = 262144\nvm.overcommit_memory = 1\n' | sudo tee /etc/sysctl.d/99-server.conf
-sudo sysctl --system > /dev/null
-sysctl vm.max_map_count vm.overcommit_memory
-```
-
-If the update installed a new kernel, reboot now. Reconnect afterwards and run this server's **Variables** blocks and the **Resource sizing** block again.
-
-```bash
-if [ -f /var/run/reboot-required ]; then echo "Reboot required"; else echo "No reboot needed"; fi
-```
-
-```bash
-sudo reboot
 ```
 
 ## Part 2: Database server
@@ -468,7 +525,7 @@ Add OpenSearch's official repository. Magento 2.4.9 supports OpenSearch 3, so th
 curl -o- https://artifacts.opensearch.org/publickeys/opensearch-release.pgp | sudo gpg --dearmor --batch --yes -o /usr/share/keyrings/opensearch-release-keyring
 echo "deb [signed-by=/usr/share/keyrings/opensearch-release-keyring] https://artifacts.opensearch.org/releases/bundle/opensearch/3.x/apt stable main" | sudo tee /etc/apt/sources.list.d/opensearch-3.x.list
 sudo apt update
-apt list -a opensearch
+apt-cache madison opensearch
 ```
 
 Set the version you want from the list above when Runme asks. 3.9.0 was the newest 3.x release when this runbook was written.
