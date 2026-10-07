@@ -1,317 +1,197 @@
-# PHP Application Server Setup — Ubuntu 24.04 LTS
+# PHP Application Server Runbook (Ubuntu 26.04 LTS)
 
-![Platform](https://img.shields.io/badge/platform-Ubuntu%2024.04%20LTS-E95420?logo=ubuntu&logoColor=white)
-![Shell](https://img.shields.io/badge/shell-bash-4EAA25?logo=gnubash&logoColor=white)
-![PHP](https://img.shields.io/badge/PHP-7.0%E2%80%937.4%20%7C%208.0%E2%80%938.5-777BB4?logo=php&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Ubuntu%2026.04%20LTS-E95420?logo=ubuntu&logoColor=white)
+![PHP](https://img.shields.io/badge/PHP-8.5-777BB4?logo=php&logoColor=white)
+![Magento](https://img.shields.io/badge/Magento-2.4.9%20ready-EE672F?logo=magento&logoColor=white)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
-An automated shell script to provision a production-ready PHP application **server** from scratch on Ubuntu 24.04 LTS — Nginx, PHP-FPM, a database (MariaDB or MySQL), and a set of optional services (OpenSearch, Valkey, Varnish, Composer, phpMyAdmin), each individually switchable, plus security hardening. It's framework-agnostic: the web root it creates can be populated with Magento, WordPress, Drupal, or any other PHP application.
+This repository contains one runbook, [`magento-server-setup-runbook.md`](magento-server-setup-runbook.md), which provisions a production PHP application server on Ubuntu 26.04 LTS. It installs Nginx, PHP-FPM, MariaDB, OpenSearch, Valkey, Varnish, Composer, and phpMyAdmin, sets up HTTPS, and hardens the server around them. The server stays general-purpose, but every version and setting meets the system requirements of Magento Open Source and Adobe Commerce 2.4.9, so a Magento store can be deployed onto it without changes.
 
-> [!NOTE]
-> This repo provisions the **server infrastructure only**. Deploying the application itself (Composer install, framework setup command, database import, admin account) is out of scope — bring your own deployment process and point it at the web root this script creates.
+The runbook does not install or deploy any application. You deploy the application separately, and the runbook's Part 6 then applies the few Magento settings that need Magento's code to be present.
 
-> [!WARNING]
-> **Do not use this script for production deployments without thorough review and validation.**
-> The script is provided as a starting point and has not been independently audited for security or reliability. Before running on any production system you must review every module, verify all generated configurations against your organisation's standards, test on a staging environment, and confirm that security hardening meets your requirements. You assume full responsibility for any production use.
-
----
-
-## Table of Contents
-
-- [Overview](#overview)
-- [Stack](#stack)
-- [Prerequisites](#prerequisites)
-- [Quick Start](#quick-start)
-- [Configuration Reference](#configuration-reference)
-- [What the Script Does](#what-the-script-does)
-- [Resource Sizing](#resource-sizing)
-- [Security Model](#security-model)
-- [Production Checklist](#production-checklist)
-- [Deploying Your Application](#deploying-your-application)
-- [Logs](#logs)
-- [File Structure](#file-structure)
-- [Known Constraints](#known-constraints)
-- [Contributing](#contributing)
-- [License](#license)
-
----
-
-## Overview
-
-`setup-ubuntu24.sh` is the single entry point. It validates a config file, detects hardware, then sources each module in `server-setup/` in order.
-
-| Script | Run as | Purpose |
+| Component | Version | Source |
 |---|---|---|
-| `setup-ubuntu24.sh` | `root` | Provisions the full server stack |
+| PHP | 8.5 | Ubuntu 26.04 |
+| Nginx | 1.28 | Ubuntu 26.04 |
+| MariaDB | 12.3 | MariaDB repository |
+| OpenSearch | 3.x | OpenSearch repository |
+| Valkey | 9.0 | Ubuntu 26.04 |
+| Varnish | 7.7 | Ubuntu 26.04 |
+| Composer | 2.10 | getcomposer.org installer |
 
-It reads from `server-setup.conf`, which you create once before running it.
+Everything can run on one server, or the database and OpenSearch can each run on a server of their own. The runbook is grouped by server role, and each server runs only the parts that apply to it. Its own introduction explains the version choices and the order of the parts in detail.
 
-> [!IMPORTANT]
-> `server-setup.conf` contains credentials and must **never** be committed to version control. It's already listed in `.gitignore`.
+The rest of this file explains how to prepare a computer to run the runbook. The runbook is a Markdown file whose `bash` blocks run on the **server**, not on your computer. Visual Studio Code makes this possible by connecting to the server over SSH (the Remote - SSH extension) and opening the runbook there as an interactive notebook (the Runme extension), so your computer only provides the editor window. The steps below are written for macOS. They are the same on Linux and Windows, apart from the terminal commands for SSH keys.
 
----
+With separate servers, repeat steps 3 to 6 for each one. Set up the database and OpenSearch servers before the app server, so that the app server's final checks can reach them.
 
-## Stack
+## 1. What you need before you start
 
-| Component | Role | Switch |
+Make sure the following are in place before you open VS Code:
+
+- **One or more Ubuntu 26.04 LTS (x86-64) servers** that you can reach over SSH as a user with `sudo` rights. On AWS, this is normally the `ubuntu` user. The runbook's repositories and package names are chosen for 26.04, and it warns you on any other release.
+- **Enough disk space on each server.** AWS's default 8 GB root volume is too small, because Ubuntu and the base packages already use most of it, and the OpenSearch package alone needs about 2.6 GB free while it installs. Plan for roughly 30 GB on an OpenSearch server, 30 to 50 GB on a database server, and 40 to 60 GB on an app server, with more for a large catalogue or many product images. A volume can be enlarged later without downtime, but it cannot be shrunk.
+- **The private key for each server**, for example the `.pem` file that AWS gave you when the instance was created.
+- **Each server's public IP address or DNS name**, and, with separate servers, each server's private IP address, which the servers use to reach each other.
+- **Access to this repository on GitHub**, so that you can download the runbook.
+- **A domain name**, if the app server will get its own certificate (`SSL_MODE=letsencrypt`). Its DNS record must point to the app server before you reach the HTTPS section.
+
+You also need an SSH key pair that belongs to this computer. The runbook installs its public half on the app server, so that you can log in as the restricted web user. If you do not have one yet, create it in the macOS Terminal:
+
+```bash
+ssh-keygen -t ed25519 -C "your-name@your-mac"
+cat ~/.ssh/id_ed25519.pub
+```
+
+Keep the printed public key handy, because you will paste it into the runbook later.
+
+## 2. Install the VS Code extensions
+
+Two extensions are required:
+
+| Extension | Marketplace ID | Purpose |
 |---|---|---|
-| **Nginx** | Web server / reverse proxy (port 8080 behind Varnish, or port 80 directly if Varnish is disabled) | always on |
-| **PHP-FPM** | Application runtime (7.0–7.4 or 8.0–8.5, configurable) | always on |
-| **Database — MariaDB or MySQL** | Relational database. MariaDB: 10.6+ or 11.x. MySQL: 8.0/8.4 via apt, or 5.6/5.7 via an auto-installed Docker container (Oracle no longer ships those for Ubuntu 24.04 — see [Configuration Reference](#configuration-reference)) | `DB_ENABLED` |
-| **OpenSearch** | Search engine (used by Magento 2.4+ in place of Elasticsearch; skip it for apps that don't need one) | `OPENSEARCH_ENABLED` |
-| **Valkey (Redis-compatible)** | Sessions, application cache, full-page cache (separate DBs) | `VALKEY_ENABLED` |
-| **Varnish Cache** | Full-page HTTP cache (port 80), version selectable via Varnish's official apt repo | `VARNISH_ENABLED` |
-| **Composer** | PHP dependency manager (installs version 1 or 2) | `COMPOSER_ENABLED` |
-| **phpMyAdmin** | Database GUI (secured on a non-standard port with random URL path; requires the database to be enabled) | `PHPMYADMIN_ENABLED` |
-| **UFW** | Host firewall | always on |
-| **Nginx SSL termination** | TLS on :443 → port 80 (self-signed origin cert by default; optional — skip if TLS is already terminated upstream) | `ENABLE_SSL_TERMINATION` |
+| Remote - SSH | `ms-vscode-remote.remote-ssh` | Opens a VS Code window that runs on the server over SSH. |
+| Runme | `stateful.runme` | Turns the Markdown runbook into a notebook with a run button on each code block. |
 
----
+To install them from VS Code, open the Extensions view (`Cmd+Shift+X`), search for each name above, and click **Install**. Check that the publisher is Microsoft for Remote - SSH and Stateful for Runme, because several extensions have similar names.
 
-## Prerequisites
-
-- Ubuntu 24.04 LTS (fresh install recommended)
-- Root SSH access with a public/private key pair
-- A public/private key pair for the restricted (application) user's SSH login
-- Domain name with DNS pointing to the server (required if using Nginx SSL termination — see below)
-
-**Recommended minimum hardware:** 4 GB RAM, 2 CPU cores. 8 GB+ RAM is recommended for production.
-
----
-
-## Quick Start
-
-### 1. Clone the repository
+You can also install them from the Terminal. This requires the `code` command, which you can add from VS Code by opening the Command Palette (`Cmd+Shift+P`) and running **Shell Command: Install 'code' command in PATH**.
 
 ```bash
-git clone <repo-url> magento-server-setup
-cd magento-server-setup
+code --install-extension ms-vscode-remote.remote-ssh
+code --install-extension stateful.runme
 ```
 
-### 2. Create your configuration file
+Runme also has to be installed on the server side of each connection. You will do that in step 5, once the remote window is open.
+
+## 3. Configure SSH access to the servers
+
+First, store each server's private key in `~/.ssh` and restrict its permissions, because SSH refuses to use a key that other users can read:
 
 ```bash
-cp server-setup.conf.example server-setup.conf
-nano server-setup.conf
+mv ~/Downloads/YOUR_KEY.pem ~/.ssh/
+chmod 400 ~/.ssh/YOUR_KEY.pem
 ```
 
-Fill in **all** values — see the [Configuration Reference](#configuration-reference) below. Alternatively, open
-[`tools/config-generator.html`](tools/config-generator.html) in a browser for an interactive form that validates
-each value as you type and produces a ready-to-download `server-setup.conf`. It's a static page — nothing you
-type leaves your browser.
+Next, add an entry for each server to `~/.ssh/config`. A named entry lets both VS Code and the Terminal connect with a short alias, and it keeps the connection alive during long installation steps. With a single server, the `app-server` entry is the only one you need.
 
-### 3. Run the server setup (as root)
+```text
+Host app-server
+    HostName APP_SERVER_IP_OR_DNS
+    User ubuntu
+    IdentityFile ~/.ssh/YOUR_KEY.pem
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+
+Host db-server
+    HostName DB_SERVER_IP_OR_DNS
+    User ubuntu
+    IdentityFile ~/.ssh/YOUR_KEY.pem
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+
+Host opensearch-server
+    HostName OPENSEARCH_SERVER_IP_OR_DNS
+    User ubuntu
+    IdentityFile ~/.ssh/YOUR_KEY.pem
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+```
+
+Finally, confirm that a plain SSH login works for each server before you involve VS Code. Type `yes` if SSH asks you to confirm the server's fingerprint, and then type `exit` to close the session.
 
 ```bash
-sudo bash setup-ubuntu24.sh
+ssh app-server
 ```
 
-This provisions the entire server stack. A timestamped log file is saved in the current directory, and a summary is written to `server_setup_info.txt`.
+If this command fails, VS Code will fail in the same way, so fix the problem here first. The most common causes are a security group that does not allow port 22 from your IP address, the wrong user name, and incorrect key permissions.
 
-### Running individual modules
+## 4. Copy the runbook to each server
 
-Use `--modules` to (re)run specific modules instead of the full sequence — useful when iterating on one piece of the stack. Modules can be selected by name or by their position in the run order (see [What the Script Does](#what-the-script-does)):
+The runbook has to be opened from the server's file system so that its blocks run there. The simplest approach is to clone the repository on your computer and copy the single file to each server:
 
 ```bash
-sudo bash setup-ubuntu24.sh --modules=php,database,phpmyadmin
-sudo bash setup-ubuntu24.sh --modules=3,4,9
+git clone git@github.com:Venbhas-Softwares/magento-server-setup.git
+scp magento-server-setup/magento-server-setup-runbook.md app-server:~/
+scp magento-server-setup/magento-server-setup-runbook.md db-server:~/
+scp magento-server-setup/magento-server-setup-runbook.md opensearch-server:~/
 ```
 
----
+Cloning on your computer means the new servers never need access to GitHub. If you prefer to clone directly on a server, you must first set up a GitHub key there. Whenever the runbook in the repository changes, copy it to the servers again and reopen it in VS Code, so that Runme runs the current version.
 
-## Configuration Reference
+## 5. Open the runbook in a remote VS Code window
 
-Copy `server-setup.conf.example` to `server-setup.conf` and fill in all values.
+1. In VS Code, open the Command Palette (`Cmd+Shift+P`) and run **Remote-SSH: Connect to Host...**.
+2. Choose the server from the list, for example `db-server`. When VS Code asks for the platform, choose **Linux**. VS Code then installs its server component on the machine, which takes a minute on the first connection.
+3. Once the window shows `SSH: db-server` in the bottom-left corner, open the Extensions view. Find Runme under **Local - Installed** and click **Install in SSH: db-server**. Without this step, the runbook opens as plain Markdown with no run buttons.
+4. Choose **File > Open Folder...**, select `/home/ubuntu`, and confirm. Trust the folder if VS Code asks.
+5. In the Explorer, open `magento-server-setup-runbook.md`. Runme opens Markdown files as notebooks by default. If the file opens as plain text instead, right-click it and choose **Open With... > Runme**.
 
-| Variable | Example | Description |
-|---|---|---|
-| `DOMAIN_NAME` | `example.com` | Domain name the server will host |
-| `PHP_VERSION` | `8.4` | PHP version: `7.0`–`7.4` or `8.0`–`8.5` |
-| `DB_ENABLED` | `yes` | `yes`/`no` — set `no` to skip installing a database entirely |
-| `DB_ENGINE` | `mariadb` | Required if `DB_ENABLED=yes`: `mariadb` or `mysql` |
-| `DB_VERSION` | `11.4` | MariaDB: `10.6`+ or `11.x` (e.g. `10.11`, `11.4`, `11.8`). MySQL: `5.6`, `5.7`, `8.0`, or `8.4` — `8.0`/`8.4` install via apt; `5.6`/`5.7` are EOL and no longer in Oracle's apt repo for Ubuntu 24.04, so those two install via an auto-provisioned Docker container running the official image instead |
-| `DB_ROOT_PASSWORD` | — | Strong password for the database root user (required if `DB_ENABLED=yes`) |
-| `OPENSEARCH_ENABLED` | `yes` | `yes`/`no` |
-| `OPENSEARCH_VERSION` | `3.5.0` | OpenSearch version, e.g. `2.15`, `3.5.0` (required if `OPENSEARCH_ENABLED=yes`) |
-| `VALKEY_ENABLED` | `yes` | `yes`/`no` |
-| `VARNISH_ENABLED` | `yes` | `yes`/`no` — when `no`, Nginx becomes the sole HTTP-facing service on port 80 instead of sitting behind Varnish on 8080 |
-| `VARNISH_VERSION` | `7.5` | Required if `VARNISH_ENABLED=yes`: `6.0`, `7.0`, `7.4`, or `7.5` — installed from Varnish's own official packagecloud.io repo, pinned so it wins over Ubuntu's own default `varnish` package. Not every series is guaranteed to have Ubuntu 24.04 packages published at all times; `apt` errors clearly if one doesn't. `7.5` is the current series, `6.0` is the LTS branch |
-| `COMPOSER_ENABLED` | `yes` | `yes`/`no` |
-| `COMPOSER_VERSION` | `2` | Composer major version: `1` or `2` (required if `COMPOSER_ENABLED=yes`) |
-| `PHPMYADMIN_ENABLED` | `yes` | `yes`/`no` — requires `DB_ENABLED=yes` |
-| `RESTRICTED_USERNAME` | `webuser` | Linux username for the application user |
-| `SSH_PASSWORD_AUTH_ENABLED` | `no` | `yes`/`no` — the restricted (application) user's auth method, and whether sshd password authentication is on server-wide (required for either account to use a password). `no` (default): the restricted user is key-only, `RESTRICTED_USER_SSH_PUBLIC_KEY` required. `yes`: the restricted user logs in with a password instead, `RESTRICTED_USER_PASSWORD` required |
-| `ROOT_PASSWORD_AUTH_ENABLED` | `no` | `yes`/`no` — root specifically, independent of the restricted user's setting above. Requires `SSH_PASSWORD_AUTH_ENABLED=yes`. `no` (default): root stays key-only, `ROOT_USER_SSH_PUBLIC_KEY` required — this script never resets root's password unless you opt in here. `yes`: `ROOT_USER_PASSWORD` required |
-| `ROOT_USER_SSH_PUBLIC_KEY` | `ssh-ed25519 AAAA…` | Your full SSH public key for root login (required unless `ROOT_PASSWORD_AUTH_ENABLED=yes`) |
-| `RESTRICTED_USER_SSH_PUBLIC_KEY` | `ssh-ed25519 AAAA…` | SSH public key for the restricted user's login (required unless `SSH_PASSWORD_AUTH_ENABLED=yes`) |
-| `ROOT_USER_PASSWORD` | *(optional)* | Root account password, min 12 characters (required if `ROOT_PASSWORD_AUTH_ENABLED=yes`) |
-| `RESTRICTED_USER_PASSWORD` | *(optional)* | Restricted user account password, min 12 characters (required if `SSH_PASSWORD_AUTH_ENABLED=yes`) |
-| `PMA_PORT` | `61098` | Non-standard port for phpMyAdmin (1–65535, required if `PHPMYADMIN_ENABLED=yes`) |
-| `PMA_USERNAME` | `pma_admin` | phpMyAdmin login username (required if `PHPMYADMIN_ENABLED=yes`) |
-| `PMA_PASSWORD` | — | Strong password for phpMyAdmin (required if `PHPMYADMIN_ENABLED=yes`) |
-| `ENABLE_SSL_TERMINATION` | `yes` | `yes`/`no` — whether the ssl-termination module sets up Nginx TLS termination on :443. Set `no` if TLS is already terminated upstream (Cloudflare Flexible mode, an external load balancer, another CDN) |
-| `SSL_CERT_PATH` | *(optional)* | Absolute path to a certificate to use instead of the auto-generated self-signed one. Must be set together with `SSL_KEY_PATH`, or left blank |
-| `SSL_KEY_PATH` | *(optional)* | Absolute path to the matching private key. Must be set together with `SSL_CERT_PATH`, or left blank |
+Each server gets its own VS Code window, so you can keep the database, OpenSearch, and app server windows open side by side.
 
-Prefer a form over hand-editing the file? [`tools/config-generator.html`](tools/config-generator.html) has a dropdown for every version/toggle above and validates as you type.
+## 6. Run the runbook
 
-<details>
-<summary><strong>Generated values (auto-populated — do not edit)</strong></summary>
+Read the "How to use it" section at the top of the runbook first. The points below describe how Runme behaves on top of those instructions.
 
-The script appends these to `server-setup.conf` automatically after running:
+**Follow the parts for this server.** The runbook is grouped by server. Part 1 runs on every server, Parts 2, 3, and 4 cover the database, OpenSearch, and app servers, Part 5 runs on every server again, and Part 6 runs on the app server once Magento's code is deployed. Part 7 is only for repairing file permissions on an app server that is already running. Within the parts that apply, click the run button on each `bash` block from top to bottom. Blocks labelled `text` are notes for you, and you should not try to run them. If you run a block that belongs to another kind of server, it stops with a "Skip this block" message before changing anything.
 
-| Variable | Description |
+**Update and reboot first.** Part 1 starts with the system update, and its last block reboots the server when the update requires it. Do this before entering any values, because a reboot clears them.
+
+**Answer the variable prompts.** When you run a block that contains `export NAME="value"`, Runme opens an input box for each variable and uses the value in the file as the default. Type the real value for this server (for example, your domain name) and press Enter. The values you type are kept only in Runme's session and are not written back into the file. Of the three Variables blocks, run **Server role** on every server, **App server settings** only on the app server, and **Database and OpenSearch server settings** only on a server that runs MariaDB or OpenSearch for app servers elsewhere. Then run **Resource sizing**.
+
+**Fix values that are rejected.** Each Variables block checks its values. If one is missing or invalid, for example `example.com` left as the domain or an app server IP address left empty on the database server, the block lists the problems and fails. Run it again and enter corrected values.
+
+**Know what a failed block means for variables.** Runme keeps the variables that a block sets only when the block succeeds. If a block fails, every value it set is discarded, so later blocks may report a missing variable. Fix the cause and run the failed block again.
+
+**Re-run the setup blocks after any restart.** Variables last only as long as the current Runme session. If you reload the window, reconnect after a reboot, or restart VS Code, run this server's **Variables** blocks and the **Resource sizing** block again before continuing. Any block that needs a missing variable stops with a clear error rather than running with an empty value.
+
+**Paste your public key.** In the "Restricted user and web root" section on the app server, replace the placeholder `PUBKEY` value with the public key you printed in step 1 before you run that block.
+
+**Handle the interactive block.** `sudo mariadb-secure-installation` on the database server asks a series of questions. Runme shows them in the block's output area, and you answer them by typing there. If the output area does not accept input, open a terminal in the remote window (`` Ctrl+` ``) and run the command there instead.
+
+**Leave a pager with `q`.** If a block's output ends with a line such as `lines 1-9` and the block keeps running, a command has opened its output in the `less` pager. Click into the output area and press `q`, and the block finishes.
+
+**Expect a reboot to disconnect you.** After `sudo reboot`, VS Code loses the connection. Wait about a minute, click **Reload Window** (or reconnect to the server), reopen the runbook, and continue. If you reboot after entering values, run the **Variables** and **Resource sizing** blocks again first.
+
+**Protect the generated passwords.** Several blocks print a password exactly once. Copy each one into your password manager immediately, and then clear the output with the block's **Clear Output** action. Do not save the notebook with its outputs, and never commit a copy of the runbook that contains them.
+
+**Run the SSH hardening carefully.** The SSH hardening section disables password and root logins. Before you restart `ssh`, open a second Terminal on your computer and confirm that `ssh app-server` (or the alias of the server you are working on) still works. Your `ubuntu` user keeps working because it logs in with a key, so the remote VS Code window is not affected.
+
+## 7. After the runbook is finished
+
+The phpMyAdmin tunnel command in the runbook runs on **your computer**, not on the server. Run it in the macOS Terminal, keep that window open, and browse to `http://localhost:8090`. With the SSH config entry from step 3, the command shortens to:
+
+```bash
+ssh -N -L 8090:127.0.0.1:8090 app-server
+```
+
+To log in to the app server as the restricted web user, use the key you created in step 1. Replace `webuser` with the value of `WEB_USER` if you changed it.
+
+```bash
+ssh -i ~/.ssh/id_ed25519 webuser@APP_SERVER_IP_OR_DNS
+```
+
+The servers are now ready for Magento 2.4.9, which you deploy separately. Deploy the code as the restricted user, following the rules in the runbook's **File permissions** section, so that the restricted user and PHP-FPM can both keep writing to the web root. Once Magento's code is in place, return to the app server and run Part 6 of the runbook, which applies Magento's own Nginx configuration, Varnish VCL, and cron jobs.
+
+If file permissions in a web root ever drift, for example after a deployment run as root, run Part 7 of the runbook on that server. It also works on older servers with the same layout, because it does not depend on the earlier parts.
+
+When you no longer need it, you can delete the runbook copy from each server with `rm ~/magento-server-setup-runbook.md`. The copy in this repository remains the source of truth.
+
+## Troubleshooting
+
+| Symptom | Likely cause and fix |
 |---|---|
-| `PMA_PATH` | Randomly generated phpMyAdmin URL path |
-| `WEB_ROOT` | Web root path (`/var/www/<DOMAIN_NAME>`) |
-
-</details>
-
----
-
-## What the Script Does
-
-`setup-ubuntu24.sh` validates the configuration and detected hardware, then sources each module in `server-setup/` in this order (module filenames carry no numeric prefix — this table's position column is what `--modules=<position>` refers to):
-
-| # | Module | What it does |
-|---|---|---|
-| 1 | `system.sh` | System update, essential packages, restricted user, web root |
-| 2 | `nginx.sh` | Nginx installation; when `VARNISH_ENABLED=yes`, also moves the default site to port 8080 immediately after install (before anything else can bind :80) |
-| 3 | `php.sh` | PHP-FPM installation, `php.ini`, and pool configuration |
-| 4 | `database.sh` | Database installation (MariaDB or MySQL, per `DB_ENGINE`), hardening, and tuned `my.cnf` — skipped when `DB_ENABLED=no` |
-| 5 | `opensearch.sh` | OpenSearch installation and JVM heap configuration — skipped when `OPENSEARCH_ENABLED=no` |
-| 6 | `valkey.sh` | Valkey (Redis-compatible) installation and memory limits — skipped when `VALKEY_ENABLED=no` |
-| 7 | `varnish.sh` | Varnish Cache installation (version-pinned via the official packagecloud repo) and a systemd drop-in (listen address, cache size); no VCL is written — skipped when `VARNISH_ENABLED=no` |
-| 8 | `composer.sh` | Composer installation (version 1 or 2) — skipped when `COMPOSER_ENABLED=no` |
-| 9 | `phpmyadmin.sh` | phpMyAdmin secured with HTTP Basic Auth, random port, and random URL path — skipped when `PHPMYADMIN_ENABLED=no` |
-| 10 | `security.sh` | UFW firewall rules (allow rules queued before `ufw enable`), SSH hardening via an authoritative drop-in verified with `sshd -T` before restart, Git deploy key for the restricted user |
-| 11 | `ssl-termination.sh` | Nginx SSL termination on :443 (self-signed or operator-supplied cert, proxies to port 80) — optional, skipped when `ENABLE_SSL_TERMINATION=no` |
-| 12 | `vhost.sh` | Placeholder Nginx virtual host for the web root — binds port 80 directly when Varnish is disabled, otherwise 8080 |
-| 13 | `finalize.sh` | Nginx test/restart, config persistence, `server_setup_info.txt` summary |
-
----
-
-## Resource Sizing
-
-Service allocations are calculated dynamically from detected hardware at runtime.
-
-| Service | Sizing rule |
-|---|---|
-| PHP memory limit | 2 GB minimum, scales to 6 GB+ on systems with 16 GB+ RAM |
-| PHP-FPM workers | `max_children` derived from whatever RAM remains after the fixed-size services above, floored at 5; start/spare counts based on CPU cores |
-| Database `innodb_buffer_pool_size` (MariaDB or MySQL) | 25% of RAM (≤8 GB systems) or 30% (>8 GB) — not the 50% dedicated-DB-server rule, since this is a shared single-box stack |
-| OpenSearch heap (`-Xms` / `-Xmx`), if enabled | 25% of RAM, capped at 8 GB (1 GB cap on ≤6 GB systems) |
-| Valkey `maxmemory`, if enabled | 10% of RAM, capped at 2 GB, minimum 256 MB |
-| Varnish cache, if enabled | 5% of RAM, capped at 2 GB, minimum 256 MB |
-
-> [!NOTE]
-> The setup script validates total allocations before proceeding and will warn or abort if they would exceed available memory.
-
----
-
-## Security Model
-
-- **SSH**: Root and the restricted (application) user each pick key-only or password-only login independently via `ROOT_PASSWORD_AUTH_ENABLED` and `SSH_PASSWORD_AUTH_ENABLED` (both default `no`) — enabling one doesn't force the other to switch, and resetting root's password specifically is opt-in (`ROOT_PASSWORD_AUTH_ENABLED=yes` requires `SSH_PASSWORD_AUTH_ENABLED=yes`, since sshd's `PasswordAuthentication` is a single server-wide switch; `PermitRootLogin` is what actually gates root once that's on). By default both are key-only: `PasswordAuthentication no` and `PermitRootLogin prohibit-password`, written to an authoritative drop-in (`/etc/ssh/sshd_config.d/40-hardening.conf`, sorted to win over any distro/cloud-init drop-in like `50-cloud-init.conf`). The effective config is verified with `sshd -T` before sshd restarts — the module hard-fails rather than proceeding on an unverified claim. When a key is used, it's deployed to `authorized_keys` — if a different key already exists there (e.g. from cloud-init), the write is refused rather than silently overwritten, since combined with password auth being disabled that would be a permanent lockout.
-- **Restricted user**: The application user has no `sudo` rights but does have direct SSH login — key-based via `RESTRICTED_USER_SSH_PUBLIC_KEY`, or password-based via `RESTRICTED_USER_PASSWORD` when `SSH_PASSWORD_AUTH_ENABLED=yes` — a full but unprivileged shell either way. It's also reachable via `su - <RESTRICTED_USERNAME>` from a root session. A separate Git deploy key is generated for it so you can pull a private repo when deploying manually.
-- **phpMyAdmin**: When enabled, served on a non-standard port behind HTTP Basic Authentication with a randomly generated URL path.
-- **Service binding**: The database, OpenSearch, and Valkey (whichever are enabled) all bind to `127.0.0.1` only. MySQL 5.6/5.7's Docker container publishes to `127.0.0.1:3306` specifically (not `0.0.0.0`) for the same reason — Docker manages its own iptables/nftables rules and a wider publish can bypass UFW entirely, so the loopback-only bind is what actually keeps it unreachable from outside the host.
-- **Varnish/Nginx**: When Varnish is enabled it owns port 80; Nginx listens on port 8080 and is not directly exposed. No VCL is written by this repo — the package default forwards the real client IP via `X-Forwarded-For` through to PHP-FPM automatically, so the application's maintenance-mode IP allowlists and request logs see the actual visitor IP rather than Varnish's own address. When Varnish is disabled, Nginx binds port 80 directly.
-- **Firewall (UFW)**: Only port 80, the phpMyAdmin port, and — when `ENABLE_SSL_TERMINATION=yes` — port 443 are open externally.
-- **Nginx headers**: `X-Frame-Options`, `X-XSS-Protection`, `X-Content-Type-Options`, `Referrer-Policy` are set on all responses.
-- **Config file loader**: `lib/functions.sh` uses a strict allowlist-based parser that rejects unknown variables and blocks shell injection patterns in `server-setup.conf`.
-
----
-
-## Production Checklist
-
-> [!WARNING]
-> This script must not be treated as production-ready without completing the validations below.
-
-<details>
-<summary><strong>Expand checklist</strong></summary>
-
-- [ ] Review every generated configuration file (Nginx, PHP-FPM, the database, OpenSearch, Varnish — whichever are enabled) against your organisation's hardening standards
-- [ ] Test the full setup end-to-end on a staging environment before deploying to production
-- [ ] Confirm firewall rules allow only the ports your environment requires
-- [ ] Implement automated database and file backups with off-site storage
-- [ ] Set up centralised log monitoring and alerting
-- [ ] Establish a patch management process for OS, PHP, and MariaDB
-- [ ] Validate SSL/TLS configuration with an external tool (e.g. SSL Labs)
-- [ ] Confirm `server-setup.conf` is not committed to version control and has restricted file permissions (`chmod 600 server-setup.conf`)
-
-</details>
-
----
-
-## Deploying Your Application
-
-This repo stops at server provisioning. It doesn't assume Magento — the same server works for WordPress, Drupal, or a plain PHP app; adjust the steps below accordingly. Once the script finishes:
-
-1. `su - <RESTRICTED_USERNAME>` and deploy your application into `${WEB_ROOT}` (`/var/www/<DOMAIN_NAME>`) however you normally do — Composer install, the framework's setup command, database import, etc. The restricted user's public Git deploy key (printed at the end of the run, and saved in `server_setup_info.txt`) can be added to your repository host for a private `git clone`.
-2. If your application ships its own Nginx rules (Magento does; most others don't), add `include ${WEB_ROOT}/nginx.conf;` to the server block in `/etc/nginx/sites-available/<DOMAIN_NAME>` once that file exists, then `nginx -t && systemctl reload nginx`.
-3. If Varnish is enabled, it's running with Ubuntu's package-default VCL (no Full Page Cache — it passes anything with cookies) until you install your application's own VCL: configure Varnish as the caching backend in your application's admin (if it has one), export its VCL, and replace `/etc/varnish/default.vcl` with it, then `systemctl reload varnish`.
-4. If using the auto-generated self-signed certificate, replace it at `/etc/nginx/ssl/` with a real one (e.g. a Cloudflare Origin Certificate or Let's Encrypt) for production use — or set `SSL_CERT_PATH`/`SSL_KEY_PATH` in the config and re-run `sudo bash setup-ubuntu24.sh --modules=ssl-termination`.
-
----
-
-## Logs
-
-| Log | Location |
-|---|---|
-| Server setup | `./setup-server-<timestamp>.log` |
-| Nginx | `/var/log/nginx/` |
-| PHP-FPM | `/var/log/php<version>-fpm.log` |
-
----
-
-## File Structure
-
-```
-magento-server-setup/
-├── setup-ubuntu24.sh           # Main server provisioning script (run as root) — defines module run order
-├── server-setup.conf.example  # Configuration template
-├── server-setup.conf          # Your configuration — NOT committed (gitignored)
-├── tools/
-│   └── config-generator.html   # Interactive, browser-only server-setup.conf generator
-├── lib/
-│   └── functions.sh            # Shared helpers: output, config loader, validators, module resolution
-└── server-setup/
-    ├── system.sh               # System packages, restricted user, web root
-    ├── nginx.sh                # Nginx
-    ├── php.sh                  # PHP-FPM
-    ├── database.sh             # MariaDB or MySQL, per DB_ENGINE
-    ├── opensearch.sh           # OpenSearch (optional)
-    ├── valkey.sh               # Valkey — Redis-compatible cache (optional)
-    ├── varnish.sh              # Varnish Cache (optional)
-    ├── composer.sh             # Composer (optional)
-    ├── phpmyadmin.sh           # phpMyAdmin (optional)
-    ├── security.sh             # UFW firewall + SSH hardening + deploy key
-    ├── ssl-termination.sh      # Nginx SSL termination (optional)
-    ├── vhost.sh                # Placeholder Nginx virtual host
-    └── finalize.sh             # Final checks, info file, summary
-```
-
----
-
-## Known Constraints
-
-- **Ubuntu 24.04 LTS only** — package sources (e.g. `ondrej/php` PPA, MariaDB's/Oracle's official apt repos) are version-specific to this release.
-- **MySQL 5.6/5.7 run in Docker, not natively** — Oracle's apt repository no longer carries them for Ubuntu 24.04, so the `database` module runs the official `mysql:5.6`/`mysql:5.7` image in a Docker container instead (installing Docker itself if it isn't already present). It's bound to `127.0.0.1:3306` with a persistent volume at `/var/lib/docker-mysql-legacy/data` — back that up the same way you would `/var/lib/mysql`. This is the only place in the toolchain that depends on Docker.
-- **Single-node OpenSearch** — configured as `discovery.type: single-node`; not suitable for clustering.
-- **Local services only** — all backend services bind to `127.0.0.1`; modify the relevant module if a distributed setup is needed.
-- **No automated backups** — implement an external backup strategy before going to production.
-- **No application deployment** — installing/deploying the application itself is intentionally out of scope; bring your own process.
-- **Varnish has no Full Page Cache until the app is deployed** — this repo installs Varnish but writes no VCL, so Ubuntu's package default (conservative — passes anything with cookies) is what's running. Install the application's own VCL post-deploy to get real FPC behavior; see [Deploying Your Application](#deploying-your-application).
-- **Valkey has no version selector** — unlike PHP/the database/OpenSearch/Varnish, Valkey has no official apt repo with version selection (checked directly against Valkey's own packaging discussion); the only way to pin an exact version would be compiling from source, which this repo doesn't do. `valkey.sh` installs whatever version Ubuntu's own default repo ships (currently 7.2.x on 24.04).
-
----
-
-## Contributing
-
-Bug reports and pull requests are welcome. Please [open an issue](../../issues) first to discuss any significant changes before submitting a PR.
-
----
+| The runbook opens as plain Markdown with no run buttons. | Runme is not installed on the SSH host. Install it with **Install in SSH: &lt;server&gt;** (step 5), then reopen the file with **Open With... > Runme**. |
+| A block fails with `Run the Variables blocks first` or `Run the Resource sizing block first`. | The Runme session was reset, or the block that sets the value failed. Run this server's **Variables** blocks and the **Resource sizing** block again. |
+| A block stops with `Skip this block`. | The block belongs to another kind of server. Skip it, or check the **Server role** values if this server should run that service. |
+| A block keeps running and its output ends with `lines 1-9` or similar. | The output is open in the `less` pager. Click into the output area and press `q`. |
+| `apt` or `dpkg` fails with `No space left on device`. | The root volume is too small. Run `sudo apt clean`, enlarge the volume in the AWS console, grow the filesystem with `sudo growpart /dev/nvme0n1 1` and `sudo resize2fs /dev/nvme0n1p1` (check the names with `lsblk`), run `sudo apt -f install`, and then rerun the failed block. |
+| VS Code cannot connect to the host. | Run `ssh <alias>` in the Terminal to see the real error, and check the security group, user name, and key permissions. |
+| The connection drops during a long install. | Make sure `ServerAliveInterval` is set in `~/.ssh/config`, reconnect, rerun the setup blocks, and then rerun the interrupted block. |
+| `apt` reports that it cannot get a lock. | Ubuntu's automatic updates are still running on a newly launched server. Wait a few minutes and run the block again. |
+| The application cannot write a file, or a deployment cannot replace one. | The web root's permissions have drifted. Run Part 7 of the runbook on that server. |
 
 ## License
 
-[GPL-3.0](LICENSE)
+This project is licensed under the GNU General Public License v3.0. See [LICENSE](LICENSE) for details.

@@ -19,7 +19,7 @@ Everything can run on one server, or the database and OpenSearch can run on serv
 How to use it:
 
 - Each `bash` block has its own run button in Runme. Blocks labelled `text` are notes, not commands.
-- The runbook is grouped by server. Part 1 runs on every server, Parts 2, 3, and 4 cover the database, OpenSearch, and app servers, Part 5 runs on every server again, and Part 6 runs on the app server once Magento is deployed. On each server, run the parts that apply to it from top to bottom, because later blocks depend on values set by earlier ones. A single server that runs everything goes through every part.
+- The runbook is grouped by server. Part 1 runs on every server, Parts 2, 3, and 4 cover the database, OpenSearch, and app servers, Part 5 runs on every server again, and Part 6 runs on the app server once Magento is deployed. Part 7 stands on its own: it repairs drifted file permissions on an app server that is already running, including one set up before this runbook existed. On each server, run the parts that apply to it from top to bottom, because later blocks depend on values set by earlier ones. A single server that runs everything goes through every part.
 - Each service section says which servers it applies to. The **Resource sizing** block also prints the list of sections to run on the current server.
 - Every block in a section that applies only to some servers first checks this server's **Variables** values. If you run such a block on the wrong server by mistake, it stops with a "Skip this block" message before changing anything, and Runme keeps none of its values.
 - Run the **Variables** blocks that apply to this server, then the **Resource sizing** block, first in every new Runme session. Variables last only for the current session, so if you restart VS Code or the Runme kernel, run those blocks again before continuing. Blocks that need a variable stop with an error if it is missing, rather than running with an empty value.
@@ -601,7 +601,7 @@ Run this part on the server with `INSTALL_APP=yes`. Valkey, Varnish, phpMyAdmin,
 
 Run this section on the app server only (`INSTALL_APP=yes`).
 
-The restricted user owns the application files. It has no sudo access, logs in with an SSH key only, and shares the `www-data` group with PHP-FPM and Nginx.
+The restricted user owns the application files. It has no sudo access, logs in with an SSH key only, and shares the `www-data` group with PHP-FPM and Nginx. The **File permissions** block at the end of this section keeps the files that it and PHP-FPM create writable by both.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
@@ -642,6 +642,49 @@ sudo mkdir -p "/var/www/$DOMAIN_NAME"
 sudo chown -R "$WEB_USER:www-data" "/var/www/$DOMAIN_NAME"
 sudo chmod 2775 "/var/www/$DOMAIN_NAME"
 ls -ld "/var/www/$DOMAIN_NAME"
+```
+
+#### File permissions
+
+Everything in the web root follows one permission model. Every file and folder is owned by the restricted user or by `www-data` and belongs to the `www-data` group. Folders are `2775`, ordinary files are `664`, and executables (`bin/` and `*.sh`) are `775`. Under this model the restricted user and PHP-FPM can each change everything the other creates.
+
+The setgid bit on the web root takes care of the group, but the umask of whichever process creates a file decides whether that file is group-writable. With Ubuntu's default umask of `022`, new files are created as `644` and new folders as `755`, and the other account cannot change them. This is how permissions drift on a running server. Magento sets a umask of `002` for its own PHP code, but Composer, Git, `rsync`, `tar`, and other tools do not, so this runbook sets `002` for every way that code reaches the web root:
+
+- The restricted user's SSH logins and `su -` sessions get `umask 002` at the top of `~/.profile` and `~/.bashrc`. In `~/.bashrc` it sits above the line that stops non-interactive shells, so commands run as `ssh webuser@server 'command'` get it as well.
+- Commands run with `sudo -u webuser` get it from a sudoers rule. Without that rule, sudo combines the caller's umask with its own default of `022`. Every block in this runbook that runs a command as the restricted user uses `sudo -u`.
+- PHP-FPM gets it from a systemd setting in the **PHP-FPM pool** section.
+
+The following rules keep the model intact when you deploy code:
+
+- Run Composer, Git, and `bin/magento` in the web root as the restricted user, either logged in as that user or with `sudo -u webuser`. Never run them as root or as `ubuntu`, because the files they create would belong to the wrong account.
+- Copy files with `rsync -rlt` rather than `rsync -a`. The `-a` option also copies each file's owner, group, and mode from the source machine, which replaces the `www-data` group and the setgid bit. With `-rlt`, the destination's umask and setgid bit decide them.
+- Extract archives as the restricted user, without `--same-owner` or `--same-permissions`.
+- For Magento, do not create a `magento_umask` file in the web root, because Magento uses its contents in place of its default umask of `002`.
+
+If permissions have already drifted on a server, the **Reset file permissions** part at the end of this runbook repairs them.
+
+This block sets the restricted user's umask. The sudoers rule is checked with `visudo` before it is installed, because a broken file in `/etc/sudoers.d/` would disable `sudo` for every account. The last two lines must both print `0002`.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${WEB_USER:?Run the Variables blocks first}"
+for F in .profile .bashrc; do
+  P="/home/$WEB_USER/$F"
+  if ! sudo grep -qx 'umask 002' "$P" 2>/dev/null; then
+    if sudo test -s "$P"; then sudo sed -i '1i umask 002' "$P"; else echo 'umask 002' | sudo tee "$P" > /dev/null; fi
+  fi
+  sudo chown "$WEB_USER:$WEB_USER" "$P"
+  sudo chmod 644 "$P"
+done
+echo "Defaults>$WEB_USER umask=0002, umask_override" > /tmp/web-user-umask
+if sudo visudo -cf /tmp/web-user-umask; then
+  sudo install -m 440 -o root -g root /tmp/web-user-umask /etc/sudoers.d/50-web-user-umask
+else
+  echo "ERROR: the sudoers rule did not pass visudo, so it was not installed."
+fi
+rm -f /tmp/web-user-umask
+echo "Login umask:   $(sudo su - "$WEB_USER" -c umask)"
+echo "sudo -u umask: $(sudo -u "$WEB_USER" sh -c umask)"
 ```
 
 ### PHP
@@ -746,11 +789,20 @@ EOF
 
 # -tt prints the effective configuration, which confirms the overrides are in use
 sudo "php-fpm$PHP_VERSION" -tt 2>&1 | grep -E "(pm(\.(max_children|start_servers|min_spare_servers|max_spare_servers|max_requests))?|request_terminate_timeout) = "
+
+# Files that PHP creates are group-writable (see File permissions in the Restricted user section)
+sudo mkdir -p "/etc/systemd/system/php$PHP_VERSION-fpm.service.d"
+printf '[Service]\nUMask=0002\n' | sudo tee "/etc/systemd/system/php$PHP_VERSION-fpm.service.d/umask.conf" > /dev/null
+sudo systemctl daemon-reload
 sudo systemctl enable --now "php$PHP_VERSION-fpm"
 sudo systemctl restart "php$PHP_VERSION-fpm"
+sleep 1
+echo "PHP-FPM worker umask: $(awk '/^Umask/{print $2}' "/proc/$(pgrep -f 'php-fpm: pool' | head -1)/status")"
 ```
 
 `pm.max_requests = 500` recycles each worker after 500 requests, which protects the server from slow memory leaks in application code.
+
+The `UMask=0002` setting lives in a systemd drop-in file, so a PHP package upgrade leaves it in place. The last line of the block must print `0002`.
 
 ### Nginx
 
@@ -1020,6 +1072,8 @@ rm -f composer-setup.php
 ```
 
 To pin an exact version instead, replace `--2` with `--version=2.10.3` (or the version you need).
+
+Composer is installed system-wide, but you should always run it in the web root as the restricted user, so that the files it writes keep the permission model described in the **Restricted user and web root** section.
 
 ### phpMyAdmin
 
@@ -1402,9 +1456,24 @@ Check the listening ports. On the app server, only 22, 80, and 443 (443 only whe
 sudo ss -tlnp | awk 'NR==1 || /LISTEN/' | awk '{print $4, $6}' | column -t
 ```
 
+On the app server, check the file permission model. The three umask lines must each print `0002`, and every count must be `0`. If a count is not `0`, the **Reset file permissions** part lists the affected files and repairs them.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
+R="/var/www/$DOMAIN_NAME"
+echo "Restricted user login umask:   $(sudo su - "$WEB_USER" -c umask)"
+echo "Restricted user sudo -u umask: $(sudo -u "$WEB_USER" sh -c umask)"
+echo "PHP-FPM worker umask:          $(awk '/^Umask/{print $2}' "/proc/$(pgrep -f 'php-fpm: pool' | head -1)/status")"
+echo "Wrong owner or group:          $(sudo find -H "$R" \( \( ! -user "$WEB_USER" ! -user www-data \) -o ! -group www-data \) -printf . | wc -c)"
+echo "Folders that are not 2775:     $(sudo find -H "$R" -type d ! -perm 2775 -printf . | wc -c)"
+echo "Files that are not 664:        $(sudo find -H "$R" -type f ! -name '*.sh' ! -path '*/bin/*' ! -perm 664 -printf . | wc -c)"
+echo "Executables that are not 775:  $(sudo find -H "$R" -type f \( -name '*.sh' -o -path '*/bin/*' \) ! -perm 775 -printf . | wc -c)"
+```
+
 ## Part 6: App server, after Magento is deployed
 
-Run this part on the app server only after Magento's code has been deployed to the web root, which this runbook does not do. The server is complete without it until then.
+Run this part on the app server only after Magento's code has been deployed to the web root, which this runbook does not do. The server is complete without it until then. Deploy the code as the restricted user and follow the deployment rules in **File permissions** (in the **Restricted user and web root** section), so that the web root keeps its permission model from the first deployment onwards.
 
 ### Magento 2.4.9 configuration
 
@@ -1507,3 +1576,116 @@ sudo crontab -u "$WEB_USER" -l
 ```
 
 After every deployment, restart PHP-FPM (`sudo systemctl restart php8.5-fpm`), because OPcache does not check for changed files in production.
+
+## Part 7: Reset file permissions
+
+Run this part on an app server whose web root permissions have drifted, for example a server that was set up before this runbook set the umask, or one where code was deployed as root or copied with `rsync -a`. It works on any server with the same layout: a web root under `/var/www/`, a restricted user that owns the code, and PHP-FPM running as `www-data`. It does not depend on the earlier parts or their variables, so you can run it on its own in a new Runme session, and it is safe to run as often as you like.
+
+The part first stops the drift from coming back, then repairs the web root to the model described in **File permissions** in the **Restricted user and web root** section: owner the restricted user or `www-data`, group `www-data`, folders `2775`, ordinary files `664`, and files named `*.sh` or inside a `bin/` folder `775`.
+
+### Web root and restricted user
+
+Set the web root and the restricted user when Runme asks. The block checks that the folder is under `/var/www/` and that the user exists, so that a mistyped value cannot change permissions anywhere else on the server.
+
+```bash
+export WEB_ROOT="/var/www/example.com"
+export WEB_USER="webuser"
+
+OK=yes
+WEB_ROOT="${WEB_ROOT%/}"
+if ! [[ "$WEB_ROOT" =~ ^/var/www/[^/]+ ]] || [[ "$WEB_ROOT" == *..* ]]; then
+  echo "ERROR: WEB_ROOT must be a folder under /var/www/, such as /var/www/example.com, not '$WEB_ROOT'."; OK=no
+elif [ ! -d "$WEB_ROOT" ]; then
+  echo "ERROR: $WEB_ROOT does not exist."; OK=no
+fi
+id -u "$WEB_USER" > /dev/null 2>&1 || { echo "ERROR: the user '$WEB_USER' does not exist on this server."; OK=no; }
+getent group www-data > /dev/null || { echo "ERROR: the www-data group does not exist on this server."; OK=no; }
+if [ "$OK" = yes ]; then export WEB_ROOT; echo "Web root and restricted user saved."; else exit 1; fi
+```
+
+### Check the current permissions
+
+This block changes nothing. It counts the items that do not follow the model and lists up to 20 of them with their current mode, owner, and group. Run it again after the repair below, when every count should be `0`.
+
+```bash
+: "${WEB_ROOT:?Run the Web root and restricted user block first}"
+R="$WEB_ROOT"
+echo "Wrong owner or group:         $(sudo find -H "$R" \( \( ! -user "$WEB_USER" ! -user www-data \) -o ! -group www-data \) -printf . | wc -c)"
+echo "Folders that are not 2775:    $(sudo find -H "$R" -type d ! -perm 2775 -printf . | wc -c)"
+echo "Files that are not 664:       $(sudo find -H "$R" -type f ! -name '*.sh' ! -path '*/bin/*' ! -perm 664 -printf . | wc -c)"
+echo "Executables that are not 775: $(sudo find -H "$R" -type f \( -name '*.sh' -o -path '*/bin/*' \) ! -perm 775 -printf . | wc -c)"
+echo
+echo "Examples:"
+sudo find -H "$R" \( \( ! -user "$WEB_USER" ! -user www-data \) -o ! -group www-data \
+  -o \( -type d ! -perm 2775 \) \
+  -o \( -type f ! -name '*.sh' ! -path '*/bin/*' ! -perm 664 \) \
+  -o \( -type f \( -name '*.sh' -o -path '*/bin/*' \) ! -perm 775 \) \) \
+  -printf '%M %u:%g %p\n' | head -20
+```
+
+### Stop the drift from coming back
+
+This block applies the same settings that a new server gets in Part 4, so that files created after the repair keep the right permissions:
+
+- It adds the restricted user to the `www-data` group, and `www-data` to the restricted user's group, if either membership is missing.
+- It sets `umask 002` for the restricted user's logins and for `sudo -u`, as described in **File permissions**.
+- It sets `UMask=0002` for every PHP-FPM version installed on the server, and restarts each one, which interrupts PHP requests for a moment.
+
+It also warns about a `magento_umask` file in the web root, because Magento would use that file's value instead of `002`. The umask lines at the end must each print `0002`.
+
+```bash
+: "${WEB_ROOT:?Run the Web root and restricted user block first}"
+sudo usermod -aG www-data "$WEB_USER"
+sudo usermod -aG "$WEB_USER" www-data
+
+for F in .profile .bashrc; do
+  P="$(getent passwd "$WEB_USER" | cut -d: -f6)/$F"
+  if ! sudo grep -qx 'umask 002' "$P" 2>/dev/null; then
+    if sudo test -s "$P"; then sudo sed -i '1i umask 002' "$P"; else echo 'umask 002' | sudo tee "$P" > /dev/null; fi
+  fi
+  sudo chown "$WEB_USER:$(id -gn "$WEB_USER")" "$P"
+  sudo chmod 644 "$P"
+done
+echo "Defaults>$WEB_USER umask=0002, umask_override" > /tmp/web-user-umask
+if sudo visudo -cf /tmp/web-user-umask; then
+  sudo install -m 440 -o root -g root /tmp/web-user-umask /etc/sudoers.d/50-web-user-umask
+else
+  echo "ERROR: the sudoers rule did not pass visudo, so it was not installed."
+fi
+rm -f /tmp/web-user-umask
+
+for UNIT in $(systemctl list-unit-files 'php*-fpm.service' --no-legend | awk '{print $1}'); do
+  sudo mkdir -p "/etc/systemd/system/$UNIT.d"
+  printf '[Service]\nUMask=0002\n' | sudo tee "/etc/systemd/system/$UNIT.d/umask.conf" > /dev/null
+  sudo systemctl daemon-reload
+  if systemctl is-active --quiet "$UNIT"; then sudo systemctl restart "$UNIT"; fi
+done
+sleep 1
+
+if [ -f "$WEB_ROOT/magento_umask" ]; then
+  echo "WARNING: $WEB_ROOT/magento_umask contains '$(cat "$WEB_ROOT/magento_umask")'. Delete it, or change it to 002."
+fi
+echo "Restricted user login umask:   $(sudo su - "$WEB_USER" -c umask)"
+echo "Restricted user sudo -u umask: $(sudo -u "$WEB_USER" sh -c umask)"
+for PID in $(pgrep -f 'php-fpm: pool' | head -1); do
+  echo "PHP-FPM worker umask:          $(awk '/^Umask/{print $2}' "/proc/$PID/status")"
+done
+```
+
+### Repair the web root
+
+This block changes only the items that do not follow the model, so on a large store it takes far less time than resetting every file, and it spreads the work across all CPU cores. Files owned by `www-data` keep that owner, because the shared group already lets the restricted user change them. Every other file with the wrong owner or group is given to the restricted user and the `www-data` group. Symbolic links are never followed, so nothing outside the web root is touched.
+
+The store keeps running while the block works. On a store with a very large `pub/media` folder, run it at a quiet time, because it reads every file's metadata.
+
+```bash
+: "${WEB_ROOT:?Run the Web root and restricted user block first}"
+R="$WEB_ROOT"
+J="$(nproc)"
+sudo find -H "$R" \( \( ! -user "$WEB_USER" ! -user www-data \) -o ! -group www-data \) -print0 \
+  | sudo xargs -0 -r -P "$J" -n 500 chown -h "$WEB_USER:www-data"
+sudo find -H "$R" -type d ! -perm 2775 -print0 | sudo xargs -0 -r -P "$J" -n 500 chmod 2775
+sudo find -H "$R" -type f ! -name '*.sh' ! -path '*/bin/*' ! -perm 664 -print0 | sudo xargs -0 -r -P "$J" -n 500 chmod 664
+sudo find -H "$R" -type f \( -name '*.sh' -o -path '*/bin/*' \) ! -perm 775 -print0 | sudo xargs -0 -r -P "$J" -n 500 chmod 775
+echo "Repair finished. Run the Check the current permissions block again to confirm that every count is 0."
+```
