@@ -129,7 +129,7 @@ Keep `PHP_VERSION` at `8.5`: it is the only PHP version that Ubuntu 26.04 ships 
 
 `SSL_MODE` chooses how the app server handles HTTPS:
 
-- `letsencrypt` (the default) gets a free certificate from Let's Encrypt, which renews automatically. The domain's DNS must point to this server, and port 80 must be open to the internet.
+- `letsencrypt` (the default) gets a free certificate from Let's Encrypt, which renews automatically. The certificate covers both the domain and its `www` name, so DNS for both must point to this server, and port 80 must be open to the internet.
 - `custom` uses a certificate you supply, such as a Cloudflare Origin Certificate or one bought from a certificate authority. You set its file paths in the **HTTPS** section.
 - `off` means this server does not handle HTTPS at all, because a load balancer (for example, an AWS Application Load Balancer with a certificate from AWS Certificate Manager) handles it and forwards plain HTTP to port 80. Use this when several app servers share a load balancer.
 
@@ -859,7 +859,7 @@ upstream fastcgi_backend {
 EOF
 ```
 
-Disable the default site. It listens on port 80, which Varnish or the application vhost will take over. This removes only the link in `sites-enabled`; the package's file in `sites-available` stays in place.
+Disable the default site. It listens on port 80, which the HTTPS redirect, Varnish, or the application vhost will take over, depending on `SSL_MODE`. This removes only the link in `sites-enabled`; the package's file in `sites-available` stays in place.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
@@ -868,15 +868,25 @@ sudo rm -f /etc/nginx/sites-enabled/default
 
 #### Application vhost
 
-With Varnish, the application vhost listens on `127.0.0.1:8080` only, so all public traffic must pass through Varnish. Without Varnish (`INSTALL_VARNISH=no`), it listens on port 80 directly. It serves the web root with PHP and is deliberately generic; replace it with your application's own Nginx configuration when you deploy the application. For Magento, the **Magento 2.4.9 configuration** section switches it to Magento's `nginx.conf.sample`.
+The application vhost listens on `127.0.0.1:8080` only, so no visitor reaches it directly. Requests arrive through Varnish, or, without Varnish, through the HTTPS vhost on port 443. The one exception is `SSL_MODE=off` without Varnish (`INSTALL_VARNISH=no`), where nothing else on this server listens on port 80, so the vhost listens there itself and the load balancer connects to it. The traffic paths are:
+
+```text
+SSL_MODE=letsencrypt or custom:  visitor -> Nginx :443 -> Varnish 127.0.0.1:6081 -> Nginx 127.0.0.1:8080 -> PHP-FPM
+                                 visitor -> Nginx :80  -> redirect to HTTPS (and the Let's Encrypt challenge)
+SSL_MODE=off:                    load balancer -> Varnish :80 -> Nginx 127.0.0.1:8080 -> PHP-FPM
+```
+
+Without Varnish, Nginx's port 443 (or, with `SSL_MODE=off`, port 80) connects to the application directly. Because Varnish is never reachable from the internet when this server handles HTTPS, a visitor cannot bypass HTTPS or send a forged `X-Forwarded-Proto` header to make plain HTTP look like HTTPS.
+
+The vhost serves the web root with PHP and is deliberately generic; replace it with your application's own Nginx configuration when you deploy the application. For Magento, the **Magento 2.4.9 configuration** section switches it to Magento's `nginx.conf.sample`.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
 : "${DOMAIN_NAME:?Run the Variables blocks first}"
 : "${PHP_VERSION:?Run the Variables blocks first}"
+: "${SSL_MODE:?Run the Variables blocks first}"
 VHOST_LISTEN="127.0.0.1:8080"
-[ "$INSTALL_VARNISH" = no ] && VHOST_LISTEN="80"
-sudo mkdir -p /var/www/letsencrypt
+[ "$SSL_MODE" = off ] && [ "$INSTALL_VARNISH" = no ] && VHOST_LISTEN="80"
 sudo tee "/etc/nginx/sites-available/$DOMAIN_NAME" > /dev/null <<EOF
 server {
     listen $VHOST_LISTEN;
@@ -884,11 +894,6 @@ server {
 
     root /var/www/$DOMAIN_NAME;
     index index.php index.html;
-
-    # Let's Encrypt HTTP challenge
-    location ^~ /.well-known/acme-challenge/ {
-        root /var/www/letsencrypt;
-    }
 
     location / {
         try_files \$uri \$uri/ /index.php?\$args;
@@ -995,19 +1000,22 @@ sudo apt install -y varnish
 varnishd -V
 ```
 
-#### Varnish on port 80
+#### Varnish listening address
 
-This block takes the package's own start command and changes only the listening port (to 80) and the cache size, so every other packaged option stays intact. It also raises three limits, following Adobe's guidance: Magento sends long `X-Magento-Tags` headers on category pages, and with Varnish's defaults (8 KB of headers) these pages fail with "503 Backend fetch failed". The package's default VCL already forwards requests to Nginx on `127.0.0.1:8080`. Once Magento's VCL has been installed as `/etc/varnish/magento.vcl` (see the **Magento 2.4.9 configuration** section), this block points Varnish at that file instead, so running it again never switches Varnish back to the default VCL. The settings live in a systemd drop-in file, and the package's own `default.vcl` is never edited, so both survive package upgrades.
+This block takes the package's own start command and changes only the listening address and the cache size, so every other packaged option stays intact. When this server handles HTTPS (`SSL_MODE` is `letsencrypt` or `custom`), Varnish listens on `127.0.0.1:6081`, where only the HTTPS vhost on port 443 can reach it, and Nginx's port 80 redirects visitors to HTTPS. With `SSL_MODE=off`, Varnish listens on port 80, where the load balancer connects to it. It also raises three limits, following Adobe's guidance: Magento sends long `X-Magento-Tags` headers on category pages, and with Varnish's defaults (8 KB of headers) these pages fail with "503 Backend fetch failed". The package's default VCL already forwards requests to Nginx on `127.0.0.1:8080`. Once Magento's VCL has been installed as `/etc/varnish/magento.vcl` (see the **Magento 2.4.9 configuration** section), this block points Varnish at that file instead, so running it again never switches Varnish back to the default VCL. The settings live in a systemd drop-in file, and the package's own `default.vcl` is never edited, so both survive package upgrades.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
 : "${VARNISH_CACHE_MB:?Run the Resource sizing block first}"
+: "${SSL_MODE:?Run the Variables blocks first}"
+VARNISH_LISTEN="127.0.0.1:6081"
+[ "$SSL_MODE" = off ] && VARNISH_LISTEN=":80"
 VCL=/etc/varnish/default.vcl
 [ -f /etc/varnish/magento.vcl ] && VCL=/etc/varnish/magento.vcl
 EXEC=$(systemctl cat varnish.service | grep -m1 '^ExecStart=/' \
-  | sed -E "s/-a :?[0-9]+/-a :80/; s/malloc,[0-9]+[kKmMgG]?/malloc,${VARNISH_CACHE_MB}m/; s#-f [^ ]+#-f $VCL#")
+  | sed -E "s/-a :?[0-9]+( |$)/-a $VARNISH_LISTEN\1/; s/malloc,[0-9]+[kKmMgG]?/malloc,${VARNISH_CACHE_MB}m/; s#-f [^ ]+#-f $VCL#")
 EXEC="$EXEC -p http_resp_hdr_len=65536 -p http_resp_size=98304 -p workspace_backend=131072"
-echo "$EXEC" | grep -q -- "-a :80" || { echo "Could not set port 80. Check: systemctl cat varnish"; false; } && {
+echo "$EXEC" | grep -q -- "-a $VARNISH_LISTEN " || { echo "Could not set the listening address. Check: systemctl cat varnish"; false; } && {
   sudo mkdir -p /etc/systemd/system/varnish.service.d
   printf "[Service]\nExecStart=\n%s\n" "$EXEC" | sudo tee /etc/systemd/system/varnish.service.d/override.conf
   sudo systemctl daemon-reload
@@ -1016,16 +1024,19 @@ echo "$EXEC" | grep -q -- "-a :80" || { echo "Could not set port 80. Check: syst
 }
 ```
 
-Confirm that Varnish is answering on port 80. The response code may be 403 or 404 because the web root is still empty, which is fine; the important part is that the headers include `Via` with `varnish`.
+Confirm that Varnish is answering on its address (`127.0.0.1:6081`, or port 80 with `SSL_MODE=off`). The response code may be 403 or 404 because the web root is still empty, which is fine; the important part is that the headers include `Via` with `varnish`.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
+: "${SSL_MODE:?Run the Variables blocks first}"
+VARNISH_PORT=6081
+[ "$SSL_MODE" = off ] && VARNISH_PORT=80
 sleep 2
-sudo ss -tlnp | grep -E ':(80|8080)\b'
-curl -sI -H "Host: ${DOMAIN_NAME:-localhost}" http://127.0.0.1/ | grep -iE '^(HTTP|via|x-varnish)'
+sudo ss -tlnp | grep -E ":($VARNISH_PORT|8080)\b"
+curl -sI -H "Host: ${DOMAIN_NAME:-localhost}" "http://127.0.0.1:$VARNISH_PORT/" | grep -iE '^(HTTP|via|x-varnish)'
 ```
 
-The packaged VCL is conservative and does not cache pages for visitors with cookies, so Varnish behaves almost like a pass-through proxy until you install your application's own VCL (for Magento, see the **Magento 2.4.9 configuration** section). Do not add an HTTP-to-HTTPS redirect in Nginx while this VCL is active, because the default VCL does not include the scheme in its cache key and would serve the cached redirect to HTTPS visitors too, causing a redirect loop. Handle that redirect in the application's VCL instead.
+The packaged VCL is conservative and does not cache pages for visitors with cookies, so Varnish behaves almost like a pass-through proxy until you install your application's own VCL (for Magento, see the **Magento 2.4.9 configuration** section). Never add an HTTP-to-HTTPS redirect behind Varnish, in the application vhost or in the VCL, because a cached redirect would also be served to HTTPS visitors and cause a redirect loop. The redirect belongs in front of Varnish: when this server handles HTTPS, Nginx's port 80 sends visitors to HTTPS before they reach Varnish (see the **HTTPS** section), and with `SSL_MODE=off`, configure the redirect on the load balancer (on an AWS Application Load Balancer, a port 80 listener with a redirect action).
 
 #### Moving to Varnish 8
 
@@ -1036,7 +1047,7 @@ This command checks whether Varnish's official repository has added Ubuntu 26.04
 curl -s -o /dev/null -w '%{http_code}\n' https://packagecloud.io/varnishcache/varnish80/ubuntu/dists/resolute/Release
 ```
 
-Once it prints `200`, this block adds the repository, pins Varnish to it so that Ubuntu's 7.7 is never chosen again, and upgrades. Afterwards, run the **Varnish on port 80** block again, so the drop-in is rebuilt from the new package's start command. It keeps using Magento's VCL if that is installed.
+Once it prints `200`, this block adds the repository, pins Varnish to it so that Ubuntu's 7.7 is never chosen again, and upgrades. Afterwards, run the **Varnish listening address** block again, so the drop-in is rebuilt from the new package's start command. It keeps using Magento's VCL if that is installed.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
@@ -1206,33 +1217,70 @@ Log in with the application database user created in the MariaDB section. The Ma
 
 ### HTTPS
 
-Run this section on the app server when `SSL_MODE` is `letsencrypt` or `custom`. Nginx terminates HTTPS on port 443 and passes requests to port 80 (Varnish, or the application vhost when Varnish is not installed). First get the certificate with option A or B, then set up the HTTPS vhost.
+Run this section on the app server when `SSL_MODE` is `letsencrypt` or `custom`. Nginx answers on port 80 only to redirect visitors to HTTPS, terminates HTTPS on port 443, and passes requests to Varnish on `127.0.0.1:6081` (or to the application vhost on `127.0.0.1:8080` when Varnish is not installed). First set up the port 80 redirect, then get the certificate with option A or B, and finally set up the HTTPS vhost.
+
+The site serves both `$DOMAIN_NAME` and `www.$DOMAIN_NAME`, so the certificate must cover both names, and DNS for both must point to this server.
 
 Skip this whole section when `SSL_MODE=off`. The load balancer then handles HTTPS and must forward the `X-Forwarded-Proto` header, so that the application knows the visitor used HTTPS. An AWS Application Load Balancer does this automatically.
 
+#### HTTP to HTTPS redirect
+
+Nginx's port 80 sends every visitor to the same address over HTTPS with a permanent (301) redirect. The only exception is the Let's Encrypt HTTP challenge, which must be answered over plain HTTP, so it is served from `/var/www/letsencrypt`. Because the redirect happens here, before Varnish, it is never cached, and the `X-Forwarded-Proto` header that tells the application a request used HTTPS can only come from the HTTPS vhost.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$SSL_MODE" != off ] || { echo "Skip this block: it is for an app server that handles HTTPS, and this server has INSTALL_APP=$INSTALL_APP, SSL_MODE=$SSL_MODE."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
+sudo mkdir -p /var/www/letsencrypt
+sudo tee "/etc/nginx/sites-available/$DOMAIN_NAME-http" > /dev/null <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN_NAME www.$DOMAIN_NAME;
+
+    # Let's Encrypt HTTP challenge
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+EOF
+sudo ln -sf "/etc/nginx/sites-available/$DOMAIN_NAME-http" "/etc/nginx/sites-enabled/$DOMAIN_NAME-http"
+sudo nginx -t && sudo systemctl reload nginx
+curl -sI -H "Host: $DOMAIN_NAME" http://127.0.0.1/ | grep -iE '^(HTTP|location)'
+```
+
+The last line must show a `301` status and a `Location` header that starts with `https://`.
+
 #### Option A: Let's Encrypt certificate (`SSL_MODE=letsencrypt`)
 
-Run this only after the domain's DNS points to this server and port 80 is open in the security group.
+Run this only after DNS for both the domain and its `www` name points to this server, and port 80 is open in the security group.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$SSL_MODE" = letsencrypt ] || { echo "Skip this block: it is for SSL_MODE=letsencrypt, and this server has SSL_MODE=$SSL_MODE."; exit 1; }
-dig +short "${DOMAIN_NAME:?Run the Variables blocks first}"
-curl -s https://checkip.amazonaws.com
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
+printf "%-40s %s\n" "This server" "$(curl -s https://checkip.amazonaws.com)"
+for NAME in "$DOMAIN_NAME" "www.$DOMAIN_NAME"; do
+  printf "%-40s %s\n" "$NAME" "$(dig +short "$NAME" | tail -1)"
+done
 ```
 
-The two addresses above must match. If they do, request the certificate:
+All three addresses above must match. If they do, request the certificate. It covers both names, and `--expand` lets the same command add `www` to a certificate that an earlier run issued for the bare domain only.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$SSL_MODE" = letsencrypt ] || { echo "Skip this block: it is for SSL_MODE=letsencrypt, and this server has SSL_MODE=$SSL_MODE."; exit 1; }
 : "${DOMAIN_NAME:?Run the Variables blocks first}"
 sudo apt install -y certbot
 sudo certbot certonly --webroot -w /var/www/letsencrypt \
-  -d "$DOMAIN_NAME" \
-  --email "$ADMIN_EMAIL" --agree-tos --no-eff-email \
+  --cert-name "$DOMAIN_NAME" -d "$DOMAIN_NAME" -d "www.$DOMAIN_NAME" --expand \
+  --email "$ADMIN_EMAIL" --agree-tos --no-eff-email --non-interactive \
   --deploy-hook "systemctl reload nginx"
+sudo openssl x509 -noout -ext subjectAltName -in "/etc/letsencrypt/live/$DOMAIN_NAME/fullchain.pem"
 ```
 
-To include `www`, add `-d "www.$DOMAIN_NAME"` to the command, but only once DNS for `www` also points to this server.
+The last line lists the names the certificate covers, and it must show both.
 
 Certificates renew automatically through the `certbot.timer` service. After the HTTPS vhost below is in place, this command tests renewal without changing anything:
 
@@ -1262,17 +1310,22 @@ sudo chmod 600 "$SSL_KEY_PATH"
 echo "Certificate: $(sudo openssl x509 -noout -pubkey -in "$SSL_CERT_PATH" | sha256sum)"
 echo "Private key: $(sudo openssl pkey -pubout -in "$SSL_KEY_PATH" | sha256sum)"
 sudo openssl x509 -noout -subject -enddate -in "$SSL_CERT_PATH"
+sudo openssl x509 -noout -ext subjectAltName -in "$SSL_CERT_PATH"
 ```
 
-The last line shows the certificate's expiry date. A custom certificate does not renew itself, so note the date and replace the files (then run `sudo systemctl reload nginx`) before it expires.
+The last line lists the names the certificate covers. It must include both `$DOMAIN_NAME` and `www.$DOMAIN_NAME` (a wildcard such as `*.example.com` covers `www`, but not the bare domain). The line before it shows the certificate's expiry date. A custom certificate does not renew itself, so note the date and replace the files (then run `sudo systemctl reload nginx`) before it expires.
 
 #### HTTPS vhost
 
-This block uses the Let's Encrypt certificate with option A, or the paths from option B.
+This block uses the Let's Encrypt certificate with option A, or the paths from option B. It passes requests to Varnish on `127.0.0.1:6081`, or straight to the application vhost on `127.0.0.1:8080` when Varnish is not installed.
+
+It also adds a default HTTPS server, which answers any connection that asks for a name other than `$DOMAIN_NAME` or `www.$DOMAIN_NAME`, such as scanners that connect by IP address. That server needs no certificate, because `ssl_reject_handshake` refuses the connection before any certificate is sent, so the store is never shown under a name it does not own and the certificate does not reveal the domain to whoever probes the IP address.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$SSL_MODE" != off ] || { echo "Skip this block: it is for an app server that handles HTTPS, and this server has INSTALL_APP=$INSTALL_APP, SSL_MODE=$SSL_MODE."; exit 1; }
 : "${DOMAIN_NAME:?Run the Variables blocks first}"
+HTTPS_BACKEND="127.0.0.1:6081"
+[ "$INSTALL_VARNISH" = no ] && HTTPS_BACKEND="127.0.0.1:8080"
 if [ "$SSL_MODE" = letsencrypt ]; then
   SSL_CERT_PATH="/etc/letsencrypt/live/$DOMAIN_NAME/fullchain.pem"
   SSL_KEY_PATH="/etc/letsencrypt/live/$DOMAIN_NAME/privkey.pem"
@@ -1296,7 +1349,7 @@ server {
     add_header Strict-Transport-Security "max-age=31536000" always;
 
     location / {
-        proxy_pass http://127.0.0.1:80;
+        proxy_pass http://$HTTPS_BACKEND;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -1309,9 +1362,33 @@ server {
     }
 }
 EOF
+sudo tee /etc/nginx/sites-available/default-ssl-reject > /dev/null <<'EOF'
+# Refuses HTTPS connections for any name that no other server block serves
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    ssl_reject_handshake on;
+}
+EOF
 sudo ln -sf "/etc/nginx/sites-available/$DOMAIN_NAME-ssl" "/etc/nginx/sites-enabled/$DOMAIN_NAME-ssl"
+sudo ln -sf /etc/nginx/sites-available/default-ssl-reject /etc/nginx/sites-enabled/default-ssl-reject
 sudo nginx -t && sudo systemctl reload nginx
+sleep 1
+for NAME in "$DOMAIN_NAME" "www.$DOMAIN_NAME"; do
+  if CODE=$(curl -s -o /dev/null -w '%{http_code}' --resolve "$NAME:443:127.0.0.1" "https://$NAME/"); then
+    printf "%-40s HTTP %s\n" "$NAME" "$CODE"
+  else
+    printf "%-40s FAILED\n" "$NAME"
+  fi
+done
+if curl -sk -o /dev/null --resolve "unknown.invalid:443:127.0.0.1" https://unknown.invalid/; then
+  echo "WARNING: an unknown name was answered. Check: ls -l /etc/nginx/sites-enabled"
+else
+  echo "Unknown names are refused"
+fi
 ```
+
+Each name must show an HTTP status code, not `FAILED`. A failure means the certificate does not cover that name or its chain is incomplete, because `curl` checks the certificate exactly as a browser would. Any status code, including 403 or 404 while the web root is still empty, shows that HTTPS works. A Cloudflare Origin Certificate is the exception: only Cloudflare trusts it, so both names show `FAILED` even when the certificate is correct, and the option B fingerprints and names are the check that matters. The last line must read `Unknown names are refused`.
 
 If you use Cloudflare in front of the server, set Cloudflare's SSL mode to **Full (strict)**, and use either option A or a Cloudflare Origin Certificate with option B. Avoid Cloudflare's **Flexible** mode with `SSL_MODE=off`: in that mode, traffic between Cloudflare and this server crosses the internet unencrypted.
 
@@ -1348,7 +1425,7 @@ sudo ufw --force enable
 sudo ufw status verbose
 ```
 
-Never open 8080 (Nginx behind Varnish), 8090 (phpMyAdmin), or 6379 and 6380 (Valkey), which listen on `127.0.0.1` only. Never open 3306 (MariaDB) or 9200 (OpenSearch) to anything other than the app servers.
+Never open 6081 (Varnish behind the HTTPS vhost), 8080 (Nginx behind Varnish), 8090 (phpMyAdmin), or 6379 and 6380 (Valkey), which listen on `127.0.0.1` only. Never open 3306 (MariaDB) or 9200 (OpenSearch) to anything other than the app servers.
 
 #### SSH hardening
 
@@ -1499,7 +1576,11 @@ if [ "$INSTALL_VALKEY" = yes ]; then
     echo "--page-cache=redis --page-cache-redis-server=127.0.0.1 --page-cache-redis-port=6379 --page-cache-redis-db=1 --page-cache-redis-password=$VP"
   fi
 fi
-if [ "$INSTALL_VARNISH" = yes ]; then echo "--http-cache-hosts=127.0.0.1:80"; fi
+if [ "$INSTALL_VARNISH" = yes ]; then
+  VARNISH_PORT=6081
+  [ "$SSL_MODE" = off ] && VARNISH_PORT=80
+  echo "--http-cache-hosts=127.0.0.1:$VARNISH_PORT"
+fi
 ```
 
 Magento talks to Valkey through its `redis` backend, because Valkey uses the same protocol. Clear the cell output after copying the options, because they include the Valkey password.
@@ -1512,8 +1593,9 @@ Magento ships its own Nginx rules in `nginx.conf.sample`, which serve the store 
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
 : "${DOMAIN_NAME:?Run the Variables blocks first}"
 WEB_ROOT="/var/www/$DOMAIN_NAME"
+: "${SSL_MODE:?Run the Variables blocks first}"
 VHOST_LISTEN="127.0.0.1:8080"
-[ "$INSTALL_VARNISH" = no ] && VHOST_LISTEN="80"
+[ "$SSL_MODE" = off ] && [ "$INSTALL_VARNISH" = no ] && VHOST_LISTEN="80"
 if [ -f "$WEB_ROOT/nginx.conf.sample" ]; then
   sudo install -m 644 -o root -g root "$WEB_ROOT/nginx.conf.sample" /etc/nginx/snippets/magento.conf
   sudo tee "/etc/nginx/sites-available/$DOMAIN_NAME" > /dev/null <<EOF
@@ -1523,11 +1605,6 @@ server {
 
     set \$MAGE_ROOT $WEB_ROOT;
     set \$MAGE_DEBUG_SHOW_ARGS 0;
-
-    # Let's Encrypt HTTP challenge
-    location ^~ /.well-known/acme-challenge/ {
-        root /var/www/letsencrypt;
-    }
 
     include /etc/nginx/snippets/magento.conf;
 }
@@ -1546,9 +1623,12 @@ Run this block when `INSTALL_VARNISH=yes`. It switches Magento's full-page cache
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
 : "${DOMAIN_NAME:?Run the Variables blocks first}"
+: "${SSL_MODE:?Run the Variables blocks first}"
+VARNISH_PORT=6081
+[ "$SSL_MODE" = off ] && VARNISH_PORT=80
 cd "/var/www/$DOMAIN_NAME"
 sudo -u "$WEB_USER" php bin/magento config:set system/full_page_cache/caching_application 2
-sudo -u "$WEB_USER" php bin/magento setup:config:set --http-cache-hosts=127.0.0.1:80 --no-interaction
+sudo -u "$WEB_USER" php bin/magento setup:config:set --http-cache-hosts="127.0.0.1:$VARNISH_PORT" --no-interaction
 sudo -u "$WEB_USER" php bin/magento varnish:vcl:generate --export-version=7 \
   --backend-host=127.0.0.1 --backend-port=8080 --access-list=127.0.0.1 --output-file=/tmp/magento.vcl
 if sudo varnishd -C -f /tmp/magento.vcl > /dev/null; then

@@ -34,7 +34,7 @@ Make sure the following are in place before you open VS Code:
 - **The private key for each server**, for example the `.pem` file that AWS gave you when the instance was created.
 - **Each server's public IP address or DNS name**, and, with separate servers, each server's private IP address, which the servers use to reach each other.
 - **Access to this repository on GitHub**, so that you can download the runbook.
-- **A domain name**, if the app server will get its own certificate (`SSL_MODE=letsencrypt`). Its DNS record must point to the app server before you reach the HTTPS section.
+- **A domain name**, if the app server will get its own certificate (`SSL_MODE=letsencrypt`). DNS records for both the domain and its `www` name must point to the app server before you reach the HTTPS section, because the certificate covers both names.
 
 You also need an SSH key pair that belongs to this computer. The runbook installs its public half on the app server, so that you can log in as the restricted web user. If you do not have one yet, create it in the macOS Terminal:
 
