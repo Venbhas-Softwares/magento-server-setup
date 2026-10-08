@@ -147,7 +147,7 @@ Read the "How to use it" section at the top of the runbook first. The points bel
 
 **Know what a failed block means for variables.** Runme keeps the variables that a block sets only when the block succeeds. If a block fails, every value it set is discarded, so later blocks may report a missing variable. Fix the cause and run the failed block again.
 
-**Re-run the setup blocks after any restart.** Variables last only as long as the current Runme session. If you reload the window, reconnect after a reboot, or restart VS Code, run this server's **Variables** blocks and the **Resource sizing** block again before continuing. Any block that needs a missing variable stops with a clear error rather than running with an empty value.
+**Load the saved settings after any restart.** Variables last only as long as the current Runme session, but each Variables block, and Part 6's **Deployment settings** block, also saves its values on the server in hidden files named `~/.server-setup-*.env`, which only your user can read. If you reload the window, reconnect after a reboot, or restart VS Code, run the **Load saved settings** block and then the **Resource sizing** block before continuing, and you will not be asked for the values again. To change a value, run its Variables block again. The **Delete saved settings** block removes the files once you no longer need them. Any block that needs a missing variable stops with a clear error rather than running with an empty value.
 
 **Paste your public key.** In the "Restricted user and web root" section on the app server, Runme asks for `PUBKEY`. Paste the public key you printed in step 1. The block refuses a value that is not a valid public key.
 
@@ -188,7 +188,7 @@ When you no longer need it, you can delete the runbook copy from each server wit
 | Symptom | Likely cause and fix |
 |---|---|
 | The runbook opens as plain Markdown with no run buttons. | Runme is not installed on the SSH host. Install it with **Install in SSH: &lt;server&gt;** (step 5), then reopen the file with **Open With... > Runme**. |
-| A block fails with `Run the Variables blocks first` or `Run the Resource sizing block first`. | The Runme session was reset, or the block that sets the value failed. Run this server's **Variables** blocks and the **Resource sizing** block again. |
+| A block fails with `Run the Variables blocks first` or `Run the Resource sizing block first`. | The Runme session was reset, or the block that sets the value failed. Run the **Load saved settings** block and the **Resource sizing** block. If no settings were saved yet, run this server's **Variables** blocks instead. |
 | A block stops with `Skip this block`. | The block belongs to another kind of server. Skip it, or check the **Server role** values if this server should run that service. |
 | A block keeps running and its output ends with `lines 1-9` or similar. | The output is open in the `less` pager. Click into the output area and press `q`. |
 | `apt` or `dpkg` fails with `No space left on device`. | The root volume is too small. Run `sudo apt clean`, enlarge the volume in the AWS console, grow the filesystem with `sudo growpart /dev/nvme0n1 1` and `sudo resize2fs /dev/nvme0n1p1` (check the names with `lsblk`), run `sudo apt -f install`, and then rerun the failed block. |

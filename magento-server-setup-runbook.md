@@ -22,7 +22,7 @@ How to use it:
 - The runbook is grouped by server. Part 1 runs on every server, Parts 2, 3, and 4 cover the database, OpenSearch, and app servers, Part 5 runs on every server again, and Part 6 deploys Magento on the app server. Part 7 stands on its own: it repairs drifted file permissions on an app server that is already running, including one set up before this runbook existed. On each server, run the parts that apply to it from top to bottom, because later blocks depend on values set by earlier ones. A single server that runs everything goes through every part.
 - Each service section says which servers it applies to. The **Resource sizing** block also prints the list of sections to run on the current server.
 - Every block in a section that applies only to some servers first checks this server's **Variables** values. If you run such a block on the wrong server by mistake, it stops with a "Skip this block" message before changing anything, and Runme keeps none of its values.
-- Run the **Variables** blocks that apply to this server, then the **Resource sizing** block, first in every new Runme session. Variables last only for the current session, so if you restart VS Code or the Runme kernel, run those blocks again before continuing. Blocks that need a variable stop with an error if it is missing, rather than running with an empty value.
+- Run the **Variables** blocks that apply to this server, then the **Resource sizing** block, first. Variables last only for the current Runme session, but the Variables blocks also save their values on the server. In every later session, for example after you restart VS Code or the Runme kernel, run the **Load saved settings** block and then the **Resource sizing** block before continuing. Blocks that need a variable stop with an error if it is missing, rather than running with an empty value.
 - Blocks that generate a password print it once. Copy each one into your password manager straight away, then clear the cell output.
 
 ## Before you start (AWS)
@@ -87,6 +87,8 @@ sudo reboot
 
 The variables are split into three blocks, so that each server is asked only for the values it uses. Runme asks for each value when you run a block. Replace the defaults with the values for this server.
 
+Each Variables block, and the **Deployment settings** block in Part 6, saves its values once they pass its checks. They go into hidden files in your home folder on the server, named `~/.server-setup-*.env`, which only your user can read. In a later Runme session, the **Load saved settings** block below restores them, so you do not have to type them again. Running a Variables block again replaces its saved values with the new ones, and a block that fails its checks saves nothing.
+
 #### Server role
 
 Run this block on every server. Each value is `yes` or `no` and chooses which of the main services this server runs. `INSTALL_APP` covers Nginx, PHP-FPM, and Composer.
@@ -108,7 +110,12 @@ done
 if [ "$OK" = yes ] && [ "$INSTALL_APP$INSTALL_MARIADB$INSTALL_OPENSEARCH" = nonono ]; then
   echo "ERROR: At least one of INSTALL_APP, INSTALL_MARIADB, and INSTALL_OPENSEARCH must be yes."; OK=no
 fi
-if [ "$OK" = yes ]; then echo "Server role saved."; else exit 1; fi
+if [ "$OK" = yes ]; then
+  (umask 077; for NAME in INSTALL_APP INSTALL_MARIADB INSTALL_OPENSEARCH; do printf 'export %s=%q\n' "$NAME" "${!NAME}"; done > ~/.server-setup-role.env; chmod 600 ~/.server-setup-role.env)
+  echo "Server role saved to ~/.server-setup-role.env."
+else
+  exit 1
+fi
 ```
 
 #### App server settings
@@ -177,7 +184,12 @@ done
 for CIDR in $TRUSTED_PROXY_CIDRS; do
   [[ "$CIDR" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || fail "'$CIDR' in TRUSTED_PROXY_CIDRS is not an address range such as 10.0.0.0/16."
 done
-if [ "$OK" = yes ]; then echo "App server settings saved."; else exit 1; fi
+if [ "$OK" = yes ]; then
+  (umask 077; for NAME in DOMAIN_NAME WEB_USER PHP_VERSION ADMIN_EMAIL INSTALL_VALKEY INSTALL_VARNISH INSTALL_PHPMYADMIN DB_SERVER_IP OPENSEARCH_SERVER_IP SSL_MODE TRUSTED_PROXY_CIDRS; do printf 'export %s=%q\n' "$NAME" "${!NAME}"; done > ~/.server-setup-app.env; chmod 600 ~/.server-setup-app.env)
+  echo "App server settings saved to ~/.server-setup-app.env."
+else
+  exit 1
+fi
 ```
 
 #### Database and OpenSearch server settings
@@ -195,7 +207,12 @@ fi
 for IP in $APP_SERVER_IPS; do
   [[ "$IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo "ERROR: '$IP' in APP_SERVER_IPS is not an IPv4 address."; OK=no; }
 done
-if [ "$OK" = yes ]; then echo "Database and OpenSearch server settings saved."; else exit 1; fi
+if [ "$OK" = yes ]; then
+  (umask 077; printf 'export %s=%q\n' APP_SERVER_IPS "$APP_SERVER_IPS" > ~/.server-setup-db-opensearch.env; chmod 600 ~/.server-setup-db-opensearch.env)
+  echo "Database and OpenSearch server settings saved to ~/.server-setup-db-opensearch.env."
+else
+  exit 1
+fi
 ```
 
 For example, with an app server at `10.0.1.10`, a database server at `10.0.1.20`, and an OpenSearch server at `10.0.1.30`, each server runs these blocks with these values (every value not shown keeps its default):
@@ -209,6 +226,30 @@ Database server:    Server role                 INSTALL_APP=no  INSTALL_OPENSEAR
 
 OpenSearch server:  Server role                 INSTALL_APP=no  INSTALL_MARIADB=no
                     Database/OpenSearch         APP_SERVER_IPS=10.0.1.10
+```
+
+#### Load saved settings
+
+Run this block, instead of the Variables blocks, at the start of every later Runme session on this server, for example after you reload the window, reconnect after a reboot, or restart VS Code. It restores every value that the Variables blocks and the **Deployment settings** block saved on this server, without asking for any of them. It lists the names it loaded but not their values, because the saved files include the database password and Magento's encryption key. Run the **Resource sizing** block after it, which recalculates the memory settings from the server's current RAM.
+
+```bash
+FOUND=no
+for FILE in ~/.server-setup-role.env ~/.server-setup-app.env ~/.server-setup-db-opensearch.env ~/.server-setup-deployment.env; do
+  [ -f "$FILE" ] || continue
+  source "$FILE"
+  FOUND=yes
+  echo "Loaded from $FILE: $(sed -E 's/^export ([A-Za-z_]+)=.*/\1/' "$FILE" | tr '\n' ' ')"
+done
+[ "$FOUND" = yes ] || { echo "No saved settings were found on this server. Run this server's Variables blocks instead."; exit 1; }
+```
+
+#### Delete saved settings
+
+The saved files stay on the server until you delete them. Keeping them is useful while you are still setting up the server or deploying releases with Part 6. Delete them once the server is finished, before you create an image of the server or hand it to someone else, or whenever you want to start again with fresh values. This block deletes the files only. The values stay in the current Runme session until it ends, and the server's configuration does not change.
+
+```bash
+rm -f ~/.server-setup-role.env ~/.server-setup-app.env ~/.server-setup-db-opensearch.env ~/.server-setup-deployment.env
+ls ~/.server-setup-*.env 2> /dev/null || echo "No saved settings remain on this server."
 ```
 
 ### Resource sizing
@@ -1699,7 +1740,8 @@ OPENSEARCH_HOST="127.0.0.1"
 [ -n "$OPENSEARCH_HOST" ] || fail "Magento needs OpenSearch. Set OPENSEARCH_SERVER_IP in the App server settings block and run it again."
 if [ "$OK" = yes ]; then
   export DB_HOST OPENSEARCH_HOST
-  echo "Deployment settings saved. MariaDB: $DB_HOST, OpenSearch: $OPENSEARCH_HOST"
+  (umask 077; for NAME in GIT_REPO_URL GIT_BRANCH DB_NAME DB_USER DB_PASSWORD DB_DUMP_FILE MEDIA_ARCHIVE_FILE BACKEND_FRONTNAME CRYPT_KEY REPLACE_EXISTING_DB DB_HOST OPENSEARCH_HOST; do printf 'export %s=%q\n' "$NAME" "${!NAME}"; done > ~/.server-setup-deployment.env; chmod 600 ~/.server-setup-deployment.env)
+  echo "Deployment settings saved to ~/.server-setup-deployment.env. MariaDB: $DB_HOST, OpenSearch: $OPENSEARCH_HOST"
 else
   exit 1
 fi
