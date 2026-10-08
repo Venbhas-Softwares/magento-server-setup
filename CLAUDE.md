@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The repository's deliverable is a single Runme runbook, `magento-server-setup-runbook.md`, which provisions a production PHP application server on Ubuntu 26.04 LTS. `README.md` explains how to prepare a computer (VS Code, Remote - SSH, Runme, SSH config) to run the runbook against a server. There are no scripts, and the runbook must stay self-contained: it must never reference or depend on separate script files.
 
-The server is general-purpose, but every version and setting is chosen to meet the Magento Open Source and Adobe Commerce 2.4.9 system requirements, so a Magento store can be deployed onto it without changes. Part 6 holds the only Magento-specific steps: it deploys an existing store from its Git repository, a database dump, and a media archive. Installing a new, empty Magento store with `setup:install` is out of scope.
+The server is general-purpose, but every version and setting is chosen to meet the Magento Open Source and Adobe Commerce 2.4.9 system requirements, so a Magento store can be deployed onto it without changes. Part 6 holds the only Magento-specific steps: it deploys an existing store from its Git repository, a database dump, and a media archive. It runs `setup:install` against the imported database only to write `env.php` and link the store to this server's services, with no admin user, locale, currency, or time zone options. Installing a new, empty Magento store is out of scope.
 
 ## Runbook structure
 
@@ -33,6 +33,7 @@ Everything can run on one server, or the database and OpenSearch can run on thei
 - **Blocks are idempotent.** Running a block twice must be safe. Blocks that generate a password set a new one on each run and print it once.
 - **Verify in the block itself.** Blocks end by printing the effective state (`php-fpm -tt`, `sshd -T`, `nginx -t`, `SHOW VARIABLES`, `/proc/<pid>/status`) rather than assuming the change worked. Files in `/etc/sudoers.d/` are checked with `visudo -cf` before they are installed.
 - **Never set an `EXIT` trap in a block.** Runme installs its own `EXIT` trap to capture the cell's variables, and replacing it makes Runme mark the cell as failed even when every command succeeded. Remove temporary files explicitly at the end of the block instead.
+- **A block stops at the first failing pipeline.** Runme runs each block with the equivalent of `set -e -o pipefail`, so `cmd | head` fails, and ends the block silently, whenever `head` exits before `cmd` has written all its output (for example `tar -tf` on a large archive). Add `|| true` to such pipelines, and to any other command whose non-zero exit status is expected.
 - **Heredocs:** use `<<'EOF'` when nothing should expand, and escape `\$` for Nginx and PHP variables inside an unquoted `<<EOF`.
 
 ## Resource sizing
@@ -41,7 +42,7 @@ The **Resource sizing** block in Part 1 is the only place where memory is calcul
 
 ## File permission model
 
-The web root (`/var/www/<domain>`) is owned by the restricted user or `www-data`, with group `www-data`. Folders are `2775`, ordinary files `664`, and files named `*.sh` or inside a `bin/` folder `775`. The umask is `002` for every writer: the restricted user's `~/.profile` and `~/.bashrc`, a sudoers `Defaults>user umask=0002, umask_override` rule for `sudo -u`, and `UMask=0002` in a PHP-FPM systemd drop-in. The same settings appear in Part 4 (new servers) and Part 7 (repair of existing servers), so a change to one must be made to the other. The count checks in Part 5's final verification and Part 7's check block, and the repair in Part 6's **File permissions** block, also use the same `find` expressions.
+The web root (`/var/www/<domain>`) is owned by the restricted user or `www-data`, with group `www-data`. Folders are `2775`, ordinary files `664`, and files named `*.sh` or inside a `bin/` folder `775`. The umask is `002` for every writer: the restricted user's `~/.profile` and `~/.bashrc`, a sudoers `Defaults>user umask=0002, umask_override` rule for `sudo -u`, and `UMask=0002` in a PHP-FPM systemd drop-in. The same settings appear in Part 4 (new servers) and Part 7 (repair of existing servers), so a change to one must be made to the other. The count checks in Part 5's final verification and Part 7's check block, and the repairs in Part 6's **File permissions**, **Magento's environment and store settings**, and **Build** blocks, also use the same `find` expressions. Modules running under PHP-FPM can still create folders with an explicit mode such as `0755`, which no umask can widen, so Part 6 repairs permissions before every step that writes to the web root as the restricted user.
 
 ## Version choices
 
