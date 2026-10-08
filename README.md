@@ -7,7 +7,7 @@
 
 This repository contains one runbook, [`magento-server-setup-runbook.md`](magento-server-setup-runbook.md), which provisions a production PHP application server on Ubuntu 26.04 LTS. It installs Nginx, PHP-FPM, MariaDB, OpenSearch, Valkey, Varnish, Composer, and phpMyAdmin, sets up HTTPS, and hardens the server around them. The server stays general-purpose, but every version and setting meets the system requirements of Magento Open Source and Adobe Commerce 2.4.9, so a Magento store can be deployed onto it without changes.
 
-The runbook does not install or deploy any application. You deploy the application separately, and the runbook's Part 6 then applies the few Magento settings that need Magento's code to be present.
+Once the servers are ready, the runbook's Part 6 deploys an existing Magento store onto the app server from its Git repository, a database dump, and an archive of its media files.
 
 | Component | Version | Source |
 |---|---|---|
@@ -137,7 +137,7 @@ Each server gets its own VS Code window, so you can keep the database, OpenSearc
 
 Read the "How to use it" section at the top of the runbook first. The points below describe how Runme behaves on top of those instructions.
 
-**Follow the parts for this server.** The runbook is grouped by server. Part 1 runs on every server, Parts 2, 3, and 4 cover the database, OpenSearch, and app servers, Part 5 runs on every server again, and Part 6 runs on the app server once Magento's code is deployed. Part 7 is only for repairing file permissions on an app server that is already running. Within the parts that apply, click the run button on each `bash` block from top to bottom. Blocks labelled `text` are notes for you, and you should not try to run them. If you run a block that belongs to another kind of server, it stops with a "Skip this block" message before changing anything.
+**Follow the parts for this server.** The runbook is grouped by server. Part 1 runs on every server, Parts 2, 3, and 4 cover the database, OpenSearch, and app servers, Part 5 runs on every server again, and Part 6 deploys Magento on the app server. Part 7 is only for repairing file permissions on an app server that is already running. Within the parts that apply, click the run button on each `bash` block from top to bottom. Blocks labelled `text` are notes for you, and you should not try to run them. If you run a block that belongs to another kind of server, it stops with a "Skip this block" message before changing anything.
 
 **Update and reboot first.** Part 1 starts with the system update, and its last block reboots the server when the update requires it. Do this before entering any values, because a reboot clears them.
 
@@ -177,7 +177,7 @@ To log in to the app server as the restricted web user, use the key you created 
 ssh -i ~/.ssh/id_ed25519 webuser@APP_SERVER_IP_OR_DNS
 ```
 
-The servers are now ready for Magento 2.4.9, which you deploy separately. Deploy the code as the restricted user, following the rules in the runbook's **File permissions** section, so that the restricted user and PHP-FPM can both keep writing to the web root. Once Magento's code is in place, return to the app server and run Part 6 of the runbook, which applies Magento's own Nginx configuration, Varnish VCL, and cron jobs.
+The servers are now ready for Magento 2.4.9. To deploy the store, upload its database dump and media archive to the app server, as the start of the runbook's Part 6 describes, and then run Part 6 on the app server. It clones the code, installs the Composer packages, imports the data, writes Magento's configuration, builds the store in production mode, installs Magento's Nginx rules, Varnish VCL, indexer triggers, and cron jobs, and checks that the site answers. Every step runs as the restricted user, so the restricted user and PHP-FPM can both keep writing to the web root. Part 6 also lists the blocks to run again for each later release.
 
 If file permissions in a web root ever drift, for example after a deployment run as root, run Part 7 of the runbook on that server. It also works on older servers with the same layout, because it does not depend on the earlier parts.
 

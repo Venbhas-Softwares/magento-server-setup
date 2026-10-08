@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The repository's deliverable is a single Runme runbook, `magento-server-setup-runbook.md`, which provisions a production PHP application server on Ubuntu 26.04 LTS. `README.md` explains how to prepare a computer (VS Code, Remote - SSH, Runme, SSH config) to run the runbook against a server. There are no scripts, and the runbook must stay self-contained: it must never reference or depend on separate script files.
 
-The server is general-purpose, but every version and setting is chosen to meet the Magento Open Source and Adobe Commerce 2.4.9 system requirements, so a Magento store can be deployed onto it without changes. Application deployment (installing Magento, Composer installs, database imports) is out of scope. Part 6 holds the only Magento-specific steps, and they run after the code has been deployed.
+The server is general-purpose, but every version and setting is chosen to meet the Magento Open Source and Adobe Commerce 2.4.9 system requirements, so a Magento store can be deployed onto it without changes. Part 6 holds the only Magento-specific steps: it deploys an existing store from its Git repository, a database dump, and a media archive. Installing a new, empty Magento store with `setup:install` is out of scope.
 
 ## Runbook structure
 
@@ -19,7 +19,7 @@ The runbook is grouped by server role, and each server runs only the parts that 
 | 3 | OpenSearch server (`INSTALL_OPENSEARCH=yes`) | OpenSearch 3.x, ICU and phonetic plugins, memory map limit, systemd drop-in settings |
 | 4 | App server (`INSTALL_APP=yes`) | Restricted user, web root and file permission model, PHP 8.5, Nginx 1.28, Valkey 9 (two instances, memory overcommit), Varnish 7.7, Composer 2.10, phpMyAdmin, HTTPS |
 | 5 | Every server, to finish | UFW, SSH hardening, Fail2ban, unattended upgrades, final verification |
-| 6 | App server, after Magento is deployed | Connection options for `setup:install`, Magento's Nginx configuration, Magento's VCL, cron |
+| 6 | App server, to deploy Magento | Deployment settings, git clone, Composer, database and media import, Magento's Nginx configuration, `env.php` and store URLs, production build, Magento's VCL, indexer triggers and reindex, cron, permission repair, go-live checks |
 | 7 | Any app server with drifted permissions | Self-contained reset of web root ownership and modes, plus the settings that stop the drift returning |
 
 Everything can run on one server, or the database and OpenSearch can run on their own servers. Remote access is limited to the addresses in `APP_SERVER_IPS` (database and OpenSearch servers), and the app server connects through `DB_SERVER_IP` and `OPENSEARCH_SERVER_IP`.
@@ -32,6 +32,7 @@ Everything can run on one server, or the database and OpenSearch can run on thei
 - **Package files are never edited.** Settings go into drop-in files (`conf.d/99-*.ini`, `pool.d/zz-tuning.conf`, `mariadb.conf.d/99-tuning.cnf`, `jvm.options.d/`, `sites-available/` and `conf.d/` for Nginx, systemd `*.service.d/` drop-ins, `/etc/sudoers.d/`), so package upgrades never prompt about modified configuration files and the settings survive them. For OpenSearch and Varnish, the systemd drop-in is rebuilt from the package's own `ExecStart` line, with options appended or substituted.
 - **Blocks are idempotent.** Running a block twice must be safe. Blocks that generate a password set a new one on each run and print it once.
 - **Verify in the block itself.** Blocks end by printing the effective state (`php-fpm -tt`, `sshd -T`, `nginx -t`, `SHOW VARIABLES`, `/proc/<pid>/status`) rather than assuming the change worked. Files in `/etc/sudoers.d/` are checked with `visudo -cf` before they are installed.
+- **Never set an `EXIT` trap in a block.** Runme installs its own `EXIT` trap to capture the cell's variables, and replacing it makes Runme mark the cell as failed even when every command succeeded. Remove temporary files explicitly at the end of the block instead.
 - **Heredocs:** use `<<'EOF'` when nothing should expand, and escape `\$` for Nginx and PHP variables inside an unquoted `<<EOF`.
 
 ## Resource sizing
@@ -40,7 +41,7 @@ The **Resource sizing** block in Part 1 is the only place where memory is calcul
 
 ## File permission model
 
-The web root (`/var/www/<domain>`) is owned by the restricted user or `www-data`, with group `www-data`. Folders are `2775`, ordinary files `664`, and files named `*.sh` or inside a `bin/` folder `775`. The umask is `002` for every writer: the restricted user's `~/.profile` and `~/.bashrc`, a sudoers `Defaults>user umask=0002, umask_override` rule for `sudo -u`, and `UMask=0002` in a PHP-FPM systemd drop-in. The same settings appear in Part 4 (new servers) and Part 7 (repair of existing servers), so a change to one must be made to the other. The count checks in Part 5's final verification and Part 7's check block also use the same `find` expressions.
+The web root (`/var/www/<domain>`) is owned by the restricted user or `www-data`, with group `www-data`. Folders are `2775`, ordinary files `664`, and files named `*.sh` or inside a `bin/` folder `775`. The umask is `002` for every writer: the restricted user's `~/.profile` and `~/.bashrc`, a sudoers `Defaults>user umask=0002, umask_override` rule for `sudo -u`, and `UMask=0002` in a PHP-FPM systemd drop-in. The same settings appear in Part 4 (new servers) and Part 7 (repair of existing servers), so a change to one must be made to the other. The count checks in Part 5's final verification and Part 7's check block, and the repair in Part 6's **File permissions** block, also use the same `find` expressions.
 
 ## Version choices
 

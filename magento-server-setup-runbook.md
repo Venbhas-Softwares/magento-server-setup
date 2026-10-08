@@ -1,6 +1,6 @@
 # Server Setup Runbook (Ubuntu 26.04 LTS)
 
-This runbook provisions a production PHP application server on Ubuntu 26.04 LTS: Nginx, PHP-FPM, MariaDB, OpenSearch, Valkey, Varnish, Composer, phpMyAdmin, HTTPS, and the security hardening around them. It does not install any application. The server stays general-purpose, but every version and setting is chosen to meet the system requirements of Magento Open Source and Adobe Commerce 2.4.9, so a Magento store can be deployed onto it without changes. The **Magento 2.4.9 configuration** section near the end covers the few steps that can only happen after Magento's code is on the server.
+This runbook provisions a production PHP application server on Ubuntu 26.04 LTS: Nginx, PHP-FPM, MariaDB, OpenSearch, Valkey, Varnish, Composer, phpMyAdmin, HTTPS, and the security hardening around them. The server stays general-purpose, but every version and setting is chosen to meet the system requirements of Magento Open Source and Adobe Commerce 2.4.9, so a Magento store can be deployed onto it without changes. Part 6 then deploys an existing Magento store onto the app server from its Git repository, a database dump, and a media archive, and configures Nginx, Varnish, the indexers, and cron for it.
 
 | Component | Version | Source | Magento 2.4.9 requirement |
 |---|---|---|---|
@@ -19,7 +19,7 @@ Everything can run on one server, or the database and OpenSearch can run on serv
 How to use it:
 
 - Each `bash` block has its own run button in Runme. Blocks labelled `text` are notes, not commands.
-- The runbook is grouped by server. Part 1 runs on every server, Parts 2, 3, and 4 cover the database, OpenSearch, and app servers, Part 5 runs on every server again, and Part 6 runs on the app server once Magento is deployed. Part 7 stands on its own: it repairs drifted file permissions on an app server that is already running, including one set up before this runbook existed. On each server, run the parts that apply to it from top to bottom, because later blocks depend on values set by earlier ones. A single server that runs everything goes through every part.
+- The runbook is grouped by server. Part 1 runs on every server, Parts 2, 3, and 4 cover the database, OpenSearch, and app servers, Part 5 runs on every server again, and Part 6 deploys Magento on the app server. Part 7 stands on its own: it repairs drifted file permissions on an app server that is already running, including one set up before this runbook existed. On each server, run the parts that apply to it from top to bottom, because later blocks depend on values set by earlier ones. A single server that runs everything goes through every part.
 - Each service section says which servers it applies to. The **Resource sizing** block also prints the list of sections to run on the current server.
 - Every block in a section that applies only to some servers first checks this server's **Variables** values. If you run such a block on the wrong server by mistake, it stops with a "Skip this block" message before changing anything, and Runme keeps none of its values.
 - Run the **Variables** blocks that apply to this server, then the **Resource sizing** block, first in every new Runme session. Variables last only for the current session, so if you restart VS Code or the Runme kernel, run those blocks again before continuing. Blocks that need a variable stop with an error if it is missing, rather than running with an empty value.
@@ -367,7 +367,7 @@ if [ "$ROLE_OK" = yes ]; then
   if [ "$INSTALL_APP" = yes ] && [ "$SSL_MODE" = letsencrypt ]; then echo "  Part 4: HTTPS (Let's Encrypt certificate)"; fi
   if [ "$INSTALL_APP" = yes ] && [ "$SSL_MODE" = custom ]; then echo "  Part 4: HTTPS (your own certificate)"; fi
   echo "  Part 5: Security hardening, Final verification"
-  if [ "$INSTALL_APP" = yes ]; then echo "  Part 6: Magento 2.4.9 configuration (after Magento's code is deployed)"; fi
+  if [ "$INSTALL_APP" = yes ]; then echo "  Part 6: Deploy Magento"; fi
 else
   unset PRIVATE_IP TOTAL_RAM_MB DB_BUFFER_POOL_MB OPENSEARCH_HEAP_MB VALKEY_CACHE_MB VALKEY_SESSION_MB VARNISH_CACHE_MB
   unset PHP_MAX_CHILDREN PHP_START_SERVERS PHP_MIN_SPARE PHP_MAX_SPARE
@@ -627,7 +627,7 @@ sudo chmod 600 "/home/$WEB_USER/.ssh/authorized_keys"
 sudo ssh-keygen -lf "/home/$WEB_USER/.ssh/authorized_keys"
 ```
 
-Generate a Git deploy key for the restricted user. Add the printed public key to your Git repository as a read-only deploy key.
+Generate a Git deploy key for the restricted user. Add the printed public key to your Git repository as a read-only deploy key, because Part 6 clones the store's code with it.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
@@ -884,7 +884,7 @@ SSL_MODE=off:                    load balancer -> Varnish :80 -> Nginx 127.0.0.1
 
 Without Varnish, Nginx's port 443 (or, with `SSL_MODE=off`, port 80) connects to the application directly. Because Varnish is never reachable from the internet when this server handles HTTPS, a visitor cannot bypass HTTPS or send a forged `X-Forwarded-Proto` header to make plain HTTP look like HTTPS.
 
-The vhost serves the web root with PHP and is deliberately generic; replace it with your application's own Nginx configuration when you deploy the application. For Magento, the **Magento 2.4.9 configuration** section switches it to Magento's `nginx.conf.sample`.
+The vhost serves the web root with PHP and is deliberately generic; replace it with your application's own Nginx configuration when you deploy the application. For Magento, Part 6 switches it to Magento's `nginx.conf.sample`.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
@@ -1017,7 +1017,7 @@ varnishd -V
 
 #### Varnish listening address
 
-This block takes the package's own start command and changes only the listening address and the cache size, so every other packaged option stays intact. When this server handles HTTPS (`SSL_MODE` is `letsencrypt` or `custom`), Varnish listens on `127.0.0.1:6081`, where only the HTTPS vhost on port 443 can reach it, and Nginx's port 80 redirects visitors to HTTPS. With `SSL_MODE=off`, Varnish listens on port 80, where the load balancer connects to it. It also raises three limits, following Adobe's guidance: Magento sends long `X-Magento-Tags` headers on category pages, and with Varnish's defaults (8 KB of headers) these pages fail with "503 Backend fetch failed". The package's default VCL already forwards requests to Nginx on `127.0.0.1:8080`. Once Magento's VCL has been installed as `/etc/varnish/magento.vcl` (see the **Magento 2.4.9 configuration** section), this block points Varnish at that file instead, so running it again never switches Varnish back to the default VCL. The settings live in a systemd drop-in file, and the package's own `default.vcl` is never edited, so both survive package upgrades.
+This block takes the package's own start command and changes only the listening address and the cache size, so every other packaged option stays intact. When this server handles HTTPS (`SSL_MODE` is `letsencrypt` or `custom`), Varnish listens on `127.0.0.1:6081`, where only the HTTPS vhost on port 443 can reach it, and Nginx's port 80 redirects visitors to HTTPS. With `SSL_MODE=off`, Varnish listens on port 80, where the load balancer connects to it. It also raises three limits, following Adobe's guidance: Magento sends long `X-Magento-Tags` headers on category pages, and with Varnish's defaults (8 KB of headers) these pages fail with "503 Backend fetch failed". The package's default VCL already forwards requests to Nginx on `127.0.0.1:8080`. Once Magento's VCL has been installed as `/etc/varnish/magento.vcl` (see the **Varnish** section of Part 6), this block points Varnish at that file instead, so running it again never switches Varnish back to the default VCL. The settings live in a systemd drop-in file, and the package's own `default.vcl` is never edited, so both survive package upgrades.
 
 The block reads the start command from the package's unit file rather than from an earlier drop-in, so running it again never stacks options twice. When the unit file splits the command across several lines with trailing backslashes, the block joins them first, and it replaces the listening address in whatever form the package writes it (`:6081` or `localhost:6081`). If any of the three substitutions does not take effect, the block stops before changing anything and prints the package's start command. Otherwise it ends by showing the start command systemd now uses and whether Varnish is running.
 
@@ -1060,7 +1060,7 @@ sudo ss -tlnp | grep -E ":($VARNISH_PORT|8080)\b"
 curl -sI -H "Host: ${DOMAIN_NAME:-localhost}" "http://127.0.0.1:$VARNISH_PORT/" | grep -iE '^(HTTP|via|x-varnish)'
 ```
 
-The packaged VCL is conservative and does not cache pages for visitors with cookies, so Varnish behaves almost like a pass-through proxy until you install your application's own VCL (for Magento, see the **Magento 2.4.9 configuration** section). Never add an HTTP-to-HTTPS redirect behind Varnish, in the application vhost or in the VCL, because a cached redirect would also be served to HTTPS visitors and cause a redirect loop. The redirect belongs in front of Varnish: when this server handles HTTPS, Nginx's port 80 sends visitors to HTTPS before they reach Varnish (see the **HTTPS** section), and with `SSL_MODE=off`, configure the redirect on the load balancer (on an AWS Application Load Balancer, a port 80 listener with a redirect action).
+The packaged VCL is conservative and does not cache pages for visitors with cookies, so Varnish behaves almost like a pass-through proxy until you install your application's own VCL (for Magento, see Part 6). Never add an HTTP-to-HTTPS redirect behind Varnish, in the application vhost or in the VCL, because a cached redirect would also be served to HTTPS visitors and cause a redirect loop. The redirect belongs in front of Varnish: when this server handles HTTPS, Nginx's port 80 sends visitors to HTTPS before they reach Varnish (see the **HTTPS** section), and with `SSL_MODE=off`, configure the redirect on the load balancer (on an AWS Application Load Balancer, a port 80 listener with a redirect action).
 
 #### Moving to Varnish 8
 
@@ -1574,52 +1574,267 @@ echo "Files that are not 664:        $(sudo find -H "$R" -type f ! -name '*.sh' 
 echo "Executables that are not 775:  $(sudo find -H "$R" -type f \( -name '*.sh' -o -path '*/bin/*' \) ! -perm 775 -printf . | wc -c)"
 ```
 
-## Part 6: App server, after Magento is deployed
+## Part 6: Deploy Magento (app server)
 
-Run this part on the app server only after Magento's code has been deployed to the web root, which this runbook does not do. The server is complete without it until then. Deploy the code as the restricted user and follow the deployment rules in **File permissions** (in the **Restricted user and web root** section), so that the web root keeps its permission model from the first deployment onwards.
+Run this part on the app server once Parts 1 to 5 are complete on every server. It deploys an existing Magento 2.4.9 store from three sources: the store's Git repository, a database dump, and an archive of its `pub/media` folder. Run the sections in order, because each one depends on the one before it:
 
-### Magento 2.4.9 configuration
+```text
+1. Before you start          upload the database dump and media archive, add the deploy key
+2. Deployment settings       repository, branch, database login, file names, admin path
+3. Code                      git clone (or update), then composer install
+4. Data                      import the database, then the media files
+5. Configuration             Magento's Nginx rules, app/etc/env.php, URLs, search, caches
+6. Build                     maintenance mode, setup:upgrade, production mode, compile, static files
+7. Varnish                   Magento's VCL
+8. Indexers                  reinstall every trigger, reset, and reindex
+9. Cron                      Magento's cron jobs
+10. File permissions         repair anything the deployment left outside the model
+11. Go live                  restart PHP-FPM, flush caches, leave maintenance mode, check the site
+```
 
-Run this section on the app server only after Magento's code has been deployed into the web root, because each block uses files that come with Magento. Skip it for any other application.
+Every command in the web root runs as the restricted user, with `sudo -u`, so the files it creates follow the permission model from the start. The store stays in maintenance mode from the **Build** section until **Go live**.
 
-#### Connection settings for Magento
+### Before you start
 
-This block prints the connection options for Magento's `bin/magento setup:install` command, filled in for this server's layout. The cache, session, and page cache options are also accepted by `bin/magento setup:config:set`, which applies them to an existing installation. Replace the three `<...>` placeholders with the database values from the MariaDB section.
+The code comes from Git with the deploy key that the **Restricted user and web root** section generated. Make sure that key is added to the repository as a read-only deploy key, otherwise the clone fails with `Permission denied (publickey)`. This command prints the key again:
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
-APP_DB_HOST="localhost"
-[ "$INSTALL_MARIADB" = no ] && APP_DB_HOST="$DB_SERVER_IP"
-APP_OS_HOST="127.0.0.1"
-[ "$INSTALL_OPENSEARCH" = no ] && APP_OS_HOST="$OPENSEARCH_SERVER_IP"
-echo "--db-host=$APP_DB_HOST --db-name=<DB_NAME> --db-user=<DB_USER> --db-password=<DB_PASSWORD>"
-echo "--search-engine=opensearch --opensearch-host=$APP_OS_HOST --opensearch-port=9200"
-if [ "$INSTALL_VALKEY" = yes ]; then
-  VP="$(sudo awk '/^requirepass/{print $2}' /etc/valkey/valkey-cache.conf)"
-  echo "--cache-backend=redis --cache-backend-redis-server=127.0.0.1 --cache-backend-redis-port=6379 --cache-backend-redis-db=0 --cache-backend-redis-password=$VP"
-  echo "--session-save=redis --session-save-redis-host=127.0.0.1 --session-save-redis-port=6380 --session-save-redis-db=0 --session-save-redis-password=$VP"
-  if [ "$INSTALL_VARNISH" = no ]; then
-    echo "--page-cache=redis --page-cache-redis-server=127.0.0.1 --page-cache-redis-port=6379 --page-cache-redis-db=1 --page-cache-redis-password=$VP"
-  fi
-fi
-if [ "$INSTALL_VARNISH" = yes ]; then
-  VARNISH_PORT=6081
-  [ "$SSL_MODE" = off ] && VARNISH_PORT=80
-  echo "--http-cache-hosts=127.0.0.1:$VARNISH_PORT"
-fi
+: "${WEB_USER:?Run the Variables blocks first}"
+sudo cat "/home/$WEB_USER/.ssh/id_ed25519.pub"
 ```
 
-Magento talks to Valkey through its `redis` backend, because Valkey uses the same protocol. Clear the cell output after copying the options, because they include the Valkey password.
+The repository must hold the Magento project itself, with `composer.json`, `composer.lock`, `app/etc/config.php`, and the `auth.json` that holds the Magento Marketplace keys at its root. It must not hold `app/etc/env.php`, `vendor/`, `generated/`, `pub/static/`, or `pub/media/`, which this part creates or imports.
 
-#### Magento's Nginx configuration
+Create the database dump and the media archive on the server the store currently runs on. The dump keeps triggers and is taken in one transaction, so the store can stay online while it runs. The archive leaves out everything Magento recreates or never needs again: the resized product images in `catalog/product/cache`, which are often larger than everything else together, CAPTCHA images, temporary uploads, import files, the admin image browser's `.thumbs` thumbnails, and the Adobe Commerce Analytics export. It also leaves out `.sql` files anywhere, and `.gz` and `.tgz` files lying directly in `media/`, which are usually old dumps and backups. The `.gz` and `.tgz` rule comes after `--no-wildcards-match-slash`, so it applies to the top level only and never drops a compressed file sold as a downloadable product from `media/downloadable/`. Any dump or backup found in `pub/media` on the old server should be moved out or deleted, because anyone who guesses its URL can download it. Replace the placeholders with that server's values:
 
-Magento ships its own Nginx rules in `nginx.conf.sample`, which serve the store from the `pub` folder and block access to Magento's internal files. This block copies that file to `/etc/nginx/snippets/magento.conf`, owned by root, rather than including it from the web root, so that the account that deploys code cannot change Nginx's configuration. It then replaces the generic vhost with one that uses Magento's rules. Run it again after every Magento upgrade, in case the sample file has changed.
+```text
+mysqldump --single-transaction --quick --triggers --no-tablespaces -h DB_HOST -u DB_USER -p DB_NAME | gzip > database.sql.gz
+tar --exclude="media/captcha" --exclude="media/import" --exclude="media/tmp" \
+    --exclude="media/catalog/tmp" --exclude="media/catalog/product/cache" \
+    --exclude="media/downloadable/tmp" --exclude="media/analytics" --exclude=".thumbs" \
+    --exclude="*.sql" \
+    --no-wildcards-match-slash --exclude="media/*.gz" --exclude="media/*.tgz" \
+    -czf media.tar.gz -C /path/to/magento/pub media/
+```
+
+Then copy both files from your computer to the app server's `ubuntu` home folder:
+
+```text
+scp -i ~/.ssh/YOUR_KEY.pem database.sql.gz media.tar.gz ubuntu@APP_SERVER_IP_OR_DNS:/home/ubuntu/
+```
+
+Two more values come from the current store. The encryption key is `crypt` > `key` in its `app/etc/env.php`. Magento encrypts payment credentials, API keys, and other secrets in the database with it, so without the same key those settings can no longer be read and must be entered again. If the old store rotated its key, the value holds several keys on separate lines, and in that case copy the old `env.php` file's `crypt` section into the new one after the **Configuration** section instead. The admin path is `backend` > `frontName` in the same file.
+
+### Deployment settings
+
+Run this block on the app server. Enter the same `DB_NAME` and `DB_USER` as in the **Application database and user** section, and the password that section printed. `DB_DUMP_FILE` and `MEDIA_ARCHIVE_FILE` are the full paths of the uploaded files: the dump may be `.sql` or `.sql.gz`, and the archive `.tar.gz`, `.tgz`, `.tar`, or `.zip`. Leave `MEDIA_ARCHIVE_FILE` empty for a store that has no media files yet, and leave both empty when you deploy a later release (see **Deploying later releases**).
+
+`GIT_REPO_URL` takes an SSH address such as `git@github.com:your-org/your-store.git`, which uses the deploy key. An `https://` address also works for a public repository. `BACKEND_FRONTNAME` is the path of the admin panel, such as `office_7k2p`, so the admin is at `https://DOMAIN_NAME/office_7k2p`. A path that is hard to guess keeps automated login attacks away from the admin panel, so the block warns when it is `admin`. `CRYPT_KEY` is the encryption key described above; when it is empty, Magento generates a new one. `REPLACE_EXISTING_DB` must be `yes` only when you mean to replace a database that already holds tables, because the import then deletes everything in it.
+
+The block checks every value and that both files exist, and it works out where MariaDB and OpenSearch run from the **App server settings** block.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
 : "${DOMAIN_NAME:?Run the Variables blocks first}"
-WEB_ROOT="/var/www/$DOMAIN_NAME"
+export GIT_REPO_URL="git@github.com:your-org/your-store.git"
+export GIT_BRANCH="main"
+
+export DB_NAME="appdb"
+export DB_USER="appuser"
+export DB_PASSWORD=""
+
+export DB_DUMP_FILE="/home/ubuntu/database.sql.gz"
+export MEDIA_ARCHIVE_FILE="/home/ubuntu/media.tar.gz"
+
+export BACKEND_FRONTNAME=""
+export CRYPT_KEY=""
+export REPLACE_EXISTING_DB="no"
+
+OK=yes
+fail() { echo "ERROR: $1"; OK=no; }
+case "$GIT_REPO_URL" in
+  git@github.com:your-org/*) fail "GIT_REPO_URL is required. Enter your store's repository, not the example." ;;
+  git@*:*|ssh://*|https://*) ;;
+  *) fail "GIT_REPO_URL must look like git@github.com:org/repo.git, ssh://..., or https://..., not '$GIT_REPO_URL'." ;;
+esac
+git check-ref-format --branch "$GIT_BRANCH" > /dev/null 2>&1 || fail "GIT_BRANCH '$GIT_BRANCH' is not a valid branch name."
+for PAIR in "DB_NAME=$DB_NAME" "DB_USER=$DB_USER"; do
+  [[ "${PAIR#*=}" =~ ^[A-Za-z0-9_]{1,64}$ ]] || fail "${PAIR%%=*} '${PAIR#*=}' may contain only letters, digits, and _."
+done
+if [ -z "$DB_PASSWORD" ]; then
+  fail "DB_PASSWORD is required. Enter the password that the MariaDB section printed for $DB_USER."
+elif [[ "$DB_PASSWORD" =~ [[:space:]\"\\] ]]; then
+  fail "DB_PASSWORD must not contain spaces, double quotes, or backslashes. Rotate it with the MariaDB section's block."
+fi
+case "$DB_DUMP_FILE" in
+  "") echo "DB_DUMP_FILE is empty, so no database will be imported." ;;
+  *.sql|*.sql.gz) sudo test -f "$DB_DUMP_FILE" || fail "DB_DUMP_FILE $DB_DUMP_FILE does not exist. Upload it first." ;;
+  *) fail "DB_DUMP_FILE must end in .sql or .sql.gz, not '$DB_DUMP_FILE'." ;;
+esac
+case "$MEDIA_ARCHIVE_FILE" in
+  "") echo "MEDIA_ARCHIVE_FILE is empty, so no media files will be imported." ;;
+  *.tar.gz|*.tgz|*.tar|*.zip) sudo test -f "$MEDIA_ARCHIVE_FILE" || fail "MEDIA_ARCHIVE_FILE $MEDIA_ARCHIVE_FILE does not exist. Upload it first." ;;
+  *) fail "MEDIA_ARCHIVE_FILE must end in .tar.gz, .tgz, .tar, or .zip, not '$MEDIA_ARCHIVE_FILE'." ;;
+esac
+if ! [[ "$BACKEND_FRONTNAME" =~ ^[A-Za-z0-9_]+$ ]]; then
+  fail "BACKEND_FRONTNAME is required and may contain only letters, digits, and _."
+elif [ "$BACKEND_FRONTNAME" = admin ]; then
+  echo "WARNING: BACKEND_FRONTNAME is 'admin', the first path that automated attacks try."
+fi
+[ -z "$CRYPT_KEY" ] || [[ "$CRYPT_KEY" =~ ^[^[:space:]]+$ ]] || fail "CRYPT_KEY must be a single key without spaces."
+case "$REPLACE_EXISTING_DB" in
+  yes|no) ;;
+  *) fail "REPLACE_EXISTING_DB must be yes or no, not '$REPLACE_EXISTING_DB'." ;;
+esac
+
+DB_HOST="localhost"
+[ "$INSTALL_MARIADB" = no ] && DB_HOST="$DB_SERVER_IP"
+OPENSEARCH_HOST="127.0.0.1"
+[ "$INSTALL_OPENSEARCH" = no ] && OPENSEARCH_HOST="$OPENSEARCH_SERVER_IP"
+[ -n "$OPENSEARCH_HOST" ] || fail "Magento needs OpenSearch. Set OPENSEARCH_SERVER_IP in the App server settings block and run it again."
+if [ "$OK" = yes ]; then
+  export DB_HOST OPENSEARCH_HOST
+  echo "Deployment settings saved. MariaDB: $DB_HOST, OpenSearch: $OPENSEARCH_HOST"
+else
+  exit 1
+fi
+```
+
+### Code
+
+#### Get the code
+
+This block clones the branch into the web root as the restricted user. The first connection to the Git host records its host key in the restricted user's `known_hosts` file, and the block prints that key's fingerprint, so you can compare it with the fingerprints the Git host publishes (for GitHub, in its documentation under "GitHub's SSH key fingerprints"). It also sets `core.fileMode false`, so that the permission repair later in this part, which makes files in `bin/` folders executable, never shows up in Git as a local change.
+
+Running the block again on a web root that already holds the repository fetches the branch and fast-forwards to its latest commit, which is how later releases are deployed. It refuses to merge when the server's copy has diverged from the branch, and it refuses to clone into a web root that holds other files.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${GIT_REPO_URL:?Run the Deployment settings block first}"
+R="/var/www/$DOMAIN_NAME"
+G() { sudo -u "$WEB_USER" -H env GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git "$@"; }
+if sudo test -d "$R/.git"; then
+  G -C "$R" fetch origin "$GIT_BRANCH" || exit 1
+  G -C "$R" checkout "$GIT_BRANCH" || exit 1
+  G -C "$R" merge --ff-only "origin/$GIT_BRANCH" || { echo "ERROR: the server's copy has diverged from origin/$GIT_BRANCH. Check: sudo -u $WEB_USER git -C $R status"; exit 1; }
+elif [ -z "$(sudo ls -A "$R")" ]; then
+  G clone --branch "$GIT_BRANCH" "$GIT_REPO_URL" "$R" || { echo "ERROR: the clone failed. Check that the deploy key is added to the repository and that GIT_REPO_URL and GIT_BRANCH are right."; exit 1; }
+else
+  echo "ERROR: $R is not empty and is not a Git checkout, so nothing was cloned. Its contents are:"; sudo ls -A "$R"; exit 1
+fi
+G -C "$R" config core.fileMode false
+if [[ "$GIT_REPO_URL" =~ ^[^@/]+@([^:/]+): ]]; then
+  echo "Host key of ${BASH_REMATCH[1]}:"
+  sudo -u "$WEB_USER" -H ssh-keygen -lF "${BASH_REMATCH[1]}" | grep -v '^#'
+fi
+echo "Deployed commit: $(G -C "$R" log -1 --format='%h %s (%an, %ad)' --date=short)"
+for F in composer.json composer.lock app/etc/config.php auth.json; do
+  sudo test -f "$R/$F" || echo "WARNING: $F is missing from the repository."
+done
+```
+
+#### Composer
+
+This block installs the PHP packages exactly as `composer.lock` lists them, without development packages, and with an optimized class autoloader, which is what Adobe recommends for production. Composer reads the Magento Marketplace keys from the `auth.json` file in the project root.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${GIT_REPO_URL:?Run the Deployment settings block first}"
+R="/var/www/$DOMAIN_NAME"
+sudo -u "$WEB_USER" -H composer --working-dir="$R" install --no-dev --optimize-autoloader --no-interaction --no-progress || exit 1
+sudo -u "$WEB_USER" php "$R/bin/magento" --version
+```
+
+### Data
+
+#### Import the database
+
+This block imports the dump into the application database as the application database user, through the MariaDB client, which it installs when this server has none. `pv` shows the progress of the import.
+
+On its way into MariaDB, the dump is adjusted for this server in three ways:
+
+- `DEFINER` clauses are removed from triggers and views. They name the database account of the old server, and MariaDB refuses to create an object for another account unless the importing user has extra privileges.
+- MySQL 8's `utf8mb4_0900_ai_ci` collation, which MariaDB does not have, becomes `utf8mb4_general_ci`, the collation Magento's tables use.
+- `CREATE DATABASE` and `USE` statements are removed, so a dump made with `--databases` still lands in `DB_NAME` rather than in a database named after the old server's.
+
+The block stops before changing anything when `DB_NAME` already holds tables, unless `REPLACE_EXISTING_DB` is `yes`. In that case it drops and recreates the database first, so that no tables are left over from an earlier import.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DB_HOST:?Run the Deployment settings block first}"
+[ -n "$DB_DUMP_FILE" ] || { echo "Skip this block: DB_DUMP_FILE is empty."; exit 1; }
+set -o pipefail
+command -v mariadb > /dev/null || sudo apt install -y mariadb-client
+command -v pv > /dev/null || sudo apt install -y pv
+DB() { mariadb -h "$DB_HOST" -u "$DB_USER" --password="$DB_PASSWORD" --default-character-set=utf8mb4 --max-allowed-packet=256M "$@"; }
+
+TABLES=$(DB -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME'") \
+  || { echo "ERROR: could not log in to MariaDB at $DB_HOST as $DB_USER. Check DB_USER and DB_PASSWORD."; exit 1; }
+if [ "$TABLES" -gt 0 ]; then
+  if [ "$REPLACE_EXISTING_DB" != yes ]; then
+    echo "ERROR: $DB_NAME already holds $TABLES tables, so nothing was imported. Set REPLACE_EXISTING_DB=yes in the Deployment settings block to replace them."
+    exit 1
+  fi
+  echo "Dropping and recreating $DB_NAME, which holds $TABLES tables."
+  DB -e "DROP DATABASE \`$DB_NAME\`; CREATE DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;" || exit 1
+fi
+
+DECOMPRESS="cat"
+case "$DB_DUMP_FILE" in *.gz) DECOMPRESS="gunzip -c" ;; esac
+sudo pv "$DB_DUMP_FILE" | $DECOMPRESS \
+  | sed -E -e 's/DEFINER=`[^`]*`@`[^`]*`//g' -e 's/utf8mb4_0900_ai_ci/utf8mb4_general_ci/g' -e '/^USE `/d' -e '/^CREATE DATABASE /d' \
+  | DB "$DB_NAME" || { echo "ERROR: the import failed. The error above names the line of the dump that MariaDB rejected."; exit 1; }
+echo "Tables imported: $(DB -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME'")"
+DB -N -e "SELECT CONCAT('Magento tables found with prefix \'', LEFT(table_name, LENGTH(table_name) - 16), '\'') FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name LIKE '%core\\_config\\_data'"
+```
+
+The last line must report that Magento's tables were found. The prefix it shows is usually empty, and the **Configuration** section picks it up automatically.
+
+#### Import the media files
+
+This block extracts the archive as the restricted user into a temporary folder under `var/`, on the same disk as the web root, and copies its contents into `pub/media` with `rsync -rlt`, so the files follow the permission model. It accepts an archive whose top level is `pub/media`, `media`, or the contents of the media folder itself. Resized product images in `catalog/product/cache` are skipped, because Magento recreates them on demand. Files already in `pub/media` are kept, and files of the same name are replaced, so running the block again is safe.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${GIT_REPO_URL:?Run the Deployment settings block first}"
+[ -n "$MEDIA_ARCHIVE_FILE" ] || { echo "Skip this block: MEDIA_ARCHIVE_FILE is empty."; exit 1; }
+set -o pipefail
+command -v rsync > /dev/null || sudo apt install -y rsync
+command -v pv > /dev/null || sudo apt install -y pv
+R="/var/www/$DOMAIN_NAME"
+U() { sudo -u "$WEB_USER" "$@"; }
+T="$R/var/media-import"
+U rm -rf "$T" "$T.zip"
+U mkdir -p "$T" "$R/pub/media"
+case "$MEDIA_ARCHIVE_FILE" in
+  *.tar.gz|*.tgz) sudo pv "$MEDIA_ARCHIVE_FILE" | U tar -xzf - -C "$T" ;;
+  *.tar)          sudo pv "$MEDIA_ARCHIVE_FILE" | U tar -xf - -C "$T" ;;
+  *.zip)          sudo install -m 600 -o "$WEB_USER" -g www-data "$MEDIA_ARCHIVE_FILE" "$T.zip" && U unzip -q "$T.zip" -d "$T" ;;
+esac || { echo "ERROR: the archive could not be extracted."; U rm -rf "$T" "$T.zip"; exit 1; }
+
+SRC="$T"
+if U test -d "$T/pub/media"; then
+  SRC="$T/pub/media"
+elif U test -d "$T/media" && [ "$(U ls -A "$T")" = media ]; then
+  SRC="$T/media"
+fi
+U rsync -rlt --exclude '/catalog/product/cache/' "$SRC/" "$R/pub/media/" || { echo "ERROR: the copy into pub/media failed."; exit 1; }
+U rm -rf "$T" "$T.zip"
+echo "pub/media now holds $(sudo find "$R/pub/media" -type f | wc -l) files ($(sudo du -sh "$R/pub/media" | cut -f1))."
+```
+
+### Configuration
+
+#### Magento's Nginx configuration
+
+Magento ships its own Nginx rules in `nginx.conf.sample`, which serve the store from the `pub` folder and block access to Magento's internal files. This block copies that file to `/etc/nginx/snippets/magento.conf`, owned by root, rather than including it from the web root, so that the account that deploys code cannot change Nginx's configuration. It then replaces the generic vhost from Part 4 with one that uses Magento's rules, on the same address. Magento's rules send PHP requests to the `fastcgi_backend` upstream that Part 4 defined, and they serve `/health_check.php`, which Magento's VCL uses to check that the backend is healthy. Run the block again after every Magento upgrade, in case the sample file has changed.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
 : "${SSL_MODE:?Run the Variables blocks first}"
+WEB_ROOT="/var/www/$DOMAIN_NAME"
 VHOST_LISTEN="127.0.0.1:8080"
 [ "$SSL_MODE" = off ] && [ "$INSTALL_VARNISH" = no ] && VHOST_LISTEN="80"
 if [ -f "$WEB_ROOT/nginx.conf.sample" ]; then
@@ -1638,50 +1853,247 @@ EOF
   sudo ln -sf "/etc/nginx/sites-available/$DOMAIN_NAME" "/etc/nginx/sites-enabled/$DOMAIN_NAME"
   sudo nginx -t && sudo systemctl reload nginx
 else
-  echo "$WEB_ROOT/nginx.conf.sample not found. Deploy Magento's code first."
+  echo "$WEB_ROOT/nginx.conf.sample not found. Run the Get the code block first."
 fi
 ```
 
-#### Magento's VCL for Varnish
+Magento learns that a visitor used HTTPS from the `X-Forwarded-Proto` header, which only the HTTPS vhost (or, with `SSL_MODE=off`, the load balancer) sets, so its rules need no `HTTPS` parameter of their own.
 
-Run this block when `INSTALL_VARNISH=yes`. It switches Magento's full-page cache to Varnish, exports Magento's VCL for Varnish 7 (which also runs on Varnish 8) pointed at Nginx on `127.0.0.1:8080`, and allows cache purges only from this server. The VCL is saved as `/etc/varnish/magento.vcl`, leaving the package's own `default.vcl` untouched, so a Varnish upgrade never asks which version to keep. It is checked by compiling it first, so a faulty VCL never reaches the running Varnish, and then the systemd drop-in is pointed at it. Varnish restarts to load it, which empties the cache once. Magento's VCL checks the backend's health through `/health_check.php`, which Magento's Nginx rules serve.
+#### Magento's environment and store settings
+
+This block writes `app/etc/env.php` with `bin/magento setup:config:set`, filled in for this server's layout: the database and its table prefix (read from the imported tables), the admin path, Valkey for the cache and sessions, and Varnish as the page cache (or Valkey's database 1 when Varnish is not installed). `--document-root-is-pub=true` tells Magento that Nginx serves the `pub` folder, so the URLs it generates never contain `/pub/`. When `env.php` does not yet hold an encryption key, the block passes `CRYPT_KEY`, or lets Magento generate a new key and prints it once, so you can keep it in your password manager.
+
+It then changes the settings that the imported database carries over from the old server:
+
+- The store's base URLs become `https://DOMAIN_NAME/`, with HTTPS used for the storefront and the admin. The link URLs are reset to Magento's defaults, which follow the base URLs.
+- Requests for any other name, such as `www.DOMAIN_NAME`, are redirected to the base URL with a permanent (301) redirect, so that search engines index one address only.
+- The cookie domain is removed, so cookies belong to whichever name the store answers on. A cookie domain left over from a staging server would stop customers and admins from logging in.
+- OpenSearch's address is written to `env.php` with `--lock-env`, so it can never point back to the old server's search engine and the admin panel cannot change it.
+- The full-page cache uses Varnish with Nginx on `127.0.0.1:8080` as its backend, or Magento's built-in cache without Varnish.
+
+The block ends by listing every URL setting in the database. Settings for a single website or store view (`scope` other than `default`) override the defaults above, so check that each one belongs to this server.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DB_HOST:?Run the Deployment settings block first}"
+R="/var/www/$DOMAIN_NAME"
+cd "$R" || exit 1
+M() { sudo -u "$WEB_USER" php bin/magento "$@" || { echo "ERROR: bin/magento $1 failed."; exit 1; }; }
+DB() { mariadb -h "$DB_HOST" -u "$DB_USER" --password="$DB_PASSWORD" --default-character-set=utf8mb4 "$DB_NAME" "$@"; }
+
+T=$(DB -N -e "SELECT table_name FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name LIKE '%core\\_config\\_data' ORDER BY LENGTH(table_name) LIMIT 1")
+[ -n "$T" ] || { echo "ERROR: $DB_NAME has no core_config_data table. Run the Import the database block first."; exit 1; }
+PREFIX="${T%core_config_data}"
+
+ARGS=(--db-host="$DB_HOST" --db-name="$DB_NAME" --db-user="$DB_USER" --db-password="$DB_PASSWORD"
+      --backend-frontname="$BACKEND_FRONTNAME" --document-root-is-pub=true)
+[ -n "$PREFIX" ] && ARGS+=(--db-prefix="$PREFIX")
+NEW_KEY=no
+if ! sudo grep -q "'crypt'" app/etc/env.php 2>/dev/null; then
+  if [ -n "$CRYPT_KEY" ]; then ARGS+=(--key="$CRYPT_KEY"); else NEW_KEY=yes; fi
+fi
+if [ "$INSTALL_VALKEY" = yes ]; then
+  VP="$(sudo awk '/^requirepass/{print $2}' /etc/valkey/valkey-cache.conf)"
+  ARGS+=(--cache-backend=redis --cache-backend-redis-server=127.0.0.1 --cache-backend-redis-port=6379 --cache-backend-redis-db=0 --cache-backend-redis-password="$VP"
+         --session-save=redis --session-save-redis-host=127.0.0.1 --session-save-redis-port=6380 --session-save-redis-db=0 --session-save-redis-password="$VP")
+  if [ "$INSTALL_VARNISH" = no ]; then
+    ARGS+=(--page-cache=redis --page-cache-redis-server=127.0.0.1 --page-cache-redis-port=6379 --page-cache-redis-db=1 --page-cache-redis-password="$VP")
+  fi
+fi
+if [ "$INSTALL_VARNISH" = yes ]; then
+  VARNISH_PORT=6081
+  [ "$SSL_MODE" = off ] && VARNISH_PORT=80
+  ARGS+=(--http-cache-hosts="127.0.0.1:$VARNISH_PORT")
+fi
+M setup:config:set "${ARGS[@]}" --no-interaction
+
+M config:set --lock-env catalog/search/engine opensearch
+M config:set --lock-env catalog/search/opensearch_server_hostname "$OPENSEARCH_HOST"
+M config:set --lock-env catalog/search/opensearch_server_port 9200
+
+M config:set web/unsecure/base_url "https://$DOMAIN_NAME/"
+M config:set web/secure/base_url "https://$DOMAIN_NAME/"
+M config:set web/unsecure/base_link_url "{{unsecure_base_url}}"
+M config:set web/secure/base_link_url "{{secure_base_url}}"
+M config:set web/secure/use_in_frontend 1
+M config:set web/secure/use_in_adminhtml 1
+M config:set web/url/redirect_to_base 301
+DB -e "DELETE FROM \`${PREFIX}core_config_data\` WHERE path = 'web/cookie/cookie_domain';"
+
+if [ "$INSTALL_VARNISH" = yes ]; then
+  M config:set system/full_page_cache/caching_application 2
+  M config:set system/full_page_cache/varnish/backend_host 127.0.0.1
+  M config:set system/full_page_cache/varnish/backend_port 8080
+  M config:set system/full_page_cache/varnish/access_list 127.0.0.1
+else
+  M config:set system/full_page_cache/caching_application 1
+fi
+
+if [ "$NEW_KEY" = yes ]; then
+  echo "New encryption key: $(sudo -u "$WEB_USER" php -r 'echo (include "app/etc/env.php")["crypt"]["key"];')"
+fi
+echo "Table prefix: '${PREFIX}'"
+echo "URL settings in the database:"
+DB -t -e "SELECT scope, scope_id, path, value FROM \`${PREFIX}core_config_data\` WHERE path LIKE 'web/%url' ORDER BY scope, scope_id, path;"
+```
+
+`env.php` now holds the database and Valkey passwords. Magento creates it with mode `660` or `664`, readable only by the restricted user and the `www-data` group, and the web server never serves it, because Nginx serves only the `pub` folder.
+
+### Build
+
+This block puts the store into maintenance mode and builds it for production, in the order Adobe documents:
+
+1. `setup:upgrade` updates the database schema and data for the deployed code, and checks that OpenSearch is reachable.
+2. `deploy:mode:set production --skip-compilation` switches to production mode, in which Magento hides errors from visitors and serves only pre-built files, without building anything yet.
+3. `setup:di:compile` generates the dependency injection code.
+4. `setup:static-content:deploy` builds the static files for every locale the store uses (read from the database, plus `en_US` and the admin users' interface locales) on every CPU core.
+
+The block stops at the first command that fails, and the store then stays in maintenance mode while you fix the problem and run the block again. Compilation and static content deployment take several minutes on a typical store.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DB_HOST:?Run the Deployment settings block first}"
+R="/var/www/$DOMAIN_NAME"
+cd "$R" || exit 1
+M() { sudo -u "$WEB_USER" php bin/magento "$@" || { echo "ERROR: bin/magento $1 failed. The store stays in maintenance mode."; exit 1; }; }
+PREFIX="$(sudo -u "$WEB_USER" php -r 'echo (include "app/etc/env.php")["db"]["table_prefix"] ?? "";')"
+
+M maintenance:enable
+M setup:upgrade
+M deploy:mode:set production --skip-compilation
+M setup:di:compile
+LOCALES=$( { echo en_US
+  mariadb -h "$DB_HOST" -u "$DB_USER" --password="$DB_PASSWORD" "$DB_NAME" -N -e "SELECT value FROM \`${PREFIX}core_config_data\` WHERE path = 'general/locale/code'; SELECT interface_locale FROM \`${PREFIX}admin_user\`;"
+} | grep -E '^[a-z]{2,3}(_[A-Za-z]+)+$' | sort -u | tr '\n' ' ')
+echo "Deploying static content for: $LOCALES"
+M setup:static-content:deploy $LOCALES --jobs "$(nproc)"
+M deploy:mode:show
+```
+
+### Varnish
+
+Run this block when `INSTALL_VARNISH=yes`. It exports Magento's VCL for Varnish 7 (which also runs on Varnish 8), pointed at Nginx on `127.0.0.1:8080` and allowing cache purges only from this server. The VCL is saved as `/etc/varnish/magento.vcl`, leaving the package's own `default.vcl` untouched, so a Varnish upgrade never asks which version to keep. It is checked by compiling it first, so a faulty VCL never reaches the running Varnish, and then the systemd drop-in is pointed at it. Varnish restarts to load it, which empties the cache once. Run the block again after a Magento upgrade, because a new release can change the VCL.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
 : "${DOMAIN_NAME:?Run the Variables blocks first}"
-: "${SSL_MODE:?Run the Variables blocks first}"
-VARNISH_PORT=6081
-[ "$SSL_MODE" = off ] && VARNISH_PORT=80
-cd "/var/www/$DOMAIN_NAME"
-sudo -u "$WEB_USER" php bin/magento config:set system/full_page_cache/caching_application 2
-sudo -u "$WEB_USER" php bin/magento setup:config:set --http-cache-hosts="127.0.0.1:$VARNISH_PORT" --no-interaction
+cd "/var/www/$DOMAIN_NAME" || exit 1
+NEW_VCL="$(mktemp)"
 sudo -u "$WEB_USER" php bin/magento varnish:vcl:generate --export-version=7 \
-  --backend-host=127.0.0.1 --backend-port=8080 --access-list=127.0.0.1 --output-file=/tmp/magento.vcl
-if sudo varnishd -C -f /tmp/magento.vcl > /dev/null; then
-  sudo install -m 644 -o root -g root /tmp/magento.vcl /etc/varnish/magento.vcl
+  --backend-host=127.0.0.1 --backend-port=8080 --access-list=127.0.0.1 > "$NEW_VCL"
+if [ -s "$NEW_VCL" ] && sudo varnishd -C -f "$NEW_VCL" > /dev/null; then
+  sudo install -m 644 -o root -g root "$NEW_VCL" /etc/varnish/magento.vcl
   sudo sed -i -E 's#-f [^ ]+#-f /etc/varnish/magento.vcl#' /etc/systemd/system/varnish.service.d/override.conf
   sudo systemctl daemon-reload
   sudo systemctl restart varnish
   systemctl cat varnish.service | grep -o -- '-f [^ ]*' | tail -1
+  echo "varnish: $(systemctl is-active varnish)"
 else
   echo "The VCL did not compile, so the current VCL was kept."
 fi
-rm -f /tmp/magento.vcl
+rm -f "$NEW_VCL"
 ```
 
-#### Cron
+### Indexers
 
-Magento needs its cron jobs for indexing, emails, and scheduled tasks. This installs them in the restricted user's crontab, so they run with the same permissions as the code.
+Magento's indexers in "Update by Schedule" mode rely on database triggers, which record every change in a changelog table that cron then processes. An imported database often has triggers missing, left over from another version, or created for a different table prefix, and indexes that were built on the old server. This block therefore rebuilds both from scratch:
+
+1. Switching every indexer to "Update on Save" removes all of Magento's triggers.
+2. Switching them back to "Update by Schedule" creates a complete, current set of triggers. This is Adobe's recommended mode for production, because saving a product no longer waits for the indexers. The customer grid is included deliberately, even though Adobe documents it as supported only in "Update on Save" mode. If new customers stop appearing in the admin's customer grid, run `sudo -u webuser php bin/magento indexer:reindex customer_grid` in the web root, or switch that one indexer back with `indexer:set-mode realtime customer_grid`.
+3. `indexer:reset` marks every index as invalid, and `indexer:reindex` rebuilds them all, including the OpenSearch catalog index.
+
+The block ends by showing each indexer's mode and status, which must all be `Ready`, and the number of triggers in the database, which must be well above zero. A full reindex can take a long time on a large catalog.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DB_HOST:?Run the Deployment settings block first}"
+cd "/var/www/$DOMAIN_NAME" || exit 1
+M() { sudo -u "$WEB_USER" php bin/magento "$@" || { echo "ERROR: bin/magento $1 failed."; exit 1; }; }
+M indexer:set-mode realtime
+M indexer:set-mode schedule
+M indexer:reset
+M indexer:reindex
+M indexer:show-mode
+M indexer:status
+echo "Database triggers: $(mariadb -h "$DB_HOST" -u "$DB_USER" --password="$DB_PASSWORD" -N -e "SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema = '$DB_NAME'")"
+```
+
+### Cron
+
+Magento needs its cron jobs for indexing in "Update by Schedule" mode, emails, the message queue, and scheduled tasks. This installs them in the restricted user's crontab, so they run with the same permissions as the code. `--force` replaces Magento's own section of the crontab when it already exists, so running the block again is safe.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
 : "${DOMAIN_NAME:?Run the Variables blocks first}"
-cd "/var/www/$DOMAIN_NAME"
-sudo -u "$WEB_USER" php bin/magento cron:install
+cd "/var/www/$DOMAIN_NAME" || exit 1
+sudo -u "$WEB_USER" php bin/magento cron:install --force
 sudo crontab -u "$WEB_USER" -l
 ```
 
-After every deployment, restart PHP-FPM (`sudo systemctl restart php8.5-fpm`), because OPcache does not check for changed files in production.
+### File permissions
+
+Every command in this part ran as the restricted user with a umask of `002`, so almost everything already follows the permission model. The exceptions are files in `bin/` folders and `*.sh` files that the repository or a Composer package stores without the executable bit. This block applies the same repair as Part 7 to the web root, changing only the items that are wrong, and then shows the same counts as Part 5's final verification, which must all be `0`.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${DOMAIN_NAME:?Run the Variables blocks first}"
+R="/var/www/$DOMAIN_NAME"
+J="$(nproc)"
+sudo find -H "$R" \( \( ! -user "$WEB_USER" ! -user www-data \) -o ! -group www-data \) -print0 \
+  | sudo xargs -0 -r -P "$J" -n 500 chown -h "$WEB_USER:www-data"
+sudo find -H "$R" -type d ! -perm 2775 -print0 | sudo xargs -0 -r -P "$J" -n 500 chmod 2775
+sudo find -H "$R" -type f ! -name '*.sh' ! -path '*/bin/*' ! -perm 664 -print0 | sudo xargs -0 -r -P "$J" -n 500 chmod 664
+sudo find -H "$R" -type f \( -name '*.sh' -o -path '*/bin/*' \) ! -perm 775 -print0 | sudo xargs -0 -r -P "$J" -n 500 chmod 775
+echo "Wrong owner or group:          $(sudo find -H "$R" \( \( ! -user "$WEB_USER" ! -user www-data \) -o ! -group www-data \) -printf . | wc -c)"
+echo "Folders that are not 2775:     $(sudo find -H "$R" -type d ! -perm 2775 -printf . | wc -c)"
+echo "Files that are not 664:        $(sudo find -H "$R" -type f ! -name '*.sh' ! -path '*/bin/*' ! -perm 664 -printf . | wc -c)"
+echo "Executables that are not 775:  $(sudo find -H "$R" -type f \( -name '*.sh' -o -path '*/bin/*' \) ! -perm 775 -printf . | wc -c)"
+```
+
+### Go live
+
+This block restarts PHP-FPM, which is required after every deployment because OPcache never checks for changed files in production. It then flushes Magento's caches, which also purges Varnish, and takes the store out of maintenance mode. Finally, it requests the home page and the admin login page the way a visitor would, through HTTPS (or through the load balancer's path with `SSL_MODE=off`), and with Varnish it requests the home page a second time to confirm that Varnish served it from its cache.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
+: "${BACKEND_FRONTNAME:?Run the Deployment settings block first}"
+cd "/var/www/$DOMAIN_NAME" || exit 1
+M() { sudo -u "$WEB_USER" php bin/magento "$@" || { echo "ERROR: bin/magento $1 failed."; exit 1; }; }
+sudo systemctl restart "php$PHP_VERSION-fpm"
+M cache:flush
+M maintenance:disable
+sleep 2
+fetch() {
+  if [ "$SSL_MODE" = off ]; then
+    curl -s -o /dev/null -w '%{http_code}' -H "Host: $DOMAIN_NAME" -H "X-Forwarded-Proto: https" "http://127.0.0.1$1"
+  else
+    curl -sk -o /dev/null -w '%{http_code}' --resolve "$DOMAIN_NAME:443:127.0.0.1" "https://$DOMAIN_NAME$1"
+  fi
+}
+printf "%-48s HTTP %s\n" "https://$DOMAIN_NAME/" "$(fetch /)"
+printf "%-48s HTTP %s\n" "https://$DOMAIN_NAME/$BACKEND_FRONTNAME/" "$(fetch "/$BACKEND_FRONTNAME/")"
+if [ "$INSTALL_VARNISH" = yes ]; then
+  HITS=$(sudo varnishstat -1 -f MAIN.cache_hit | awk '{print $2}')
+  fetch / > /dev/null
+  if [ "$(sudo varnishstat -1 -f MAIN.cache_hit | awk '{print $2}')" -gt "$HITS" ]; then
+    echo "Varnish served the home page from its cache"
+  else
+    echo "WARNING: Varnish did not cache the home page. Check: sudo varnishlog -g request -q 'ReqURL eq \"/\"'"
+  fi
+fi
+```
+
+The home page must return `200`, and the admin login page `200` as well. A `500` or `503` means an error, which Magento records in `var/log/exception.log` and `var/log/system.log` in the web root, and a `404` on the admin page means `BACKEND_FRONTNAME` differs from the path in `env.php`. Log in to the admin panel with an admin account from the imported database. If you need a new one, run `sudo -u webuser php bin/magento admin:user:create` in the web root, replacing `webuser` with the value of `WEB_USER` if you changed it.
+
+Once the store works, delete the uploaded dump and archive from the `ubuntu` home folder, because the dump holds customer data:
+
+```text
+sudo rm /home/ubuntu/database.sql.gz /home/ubuntu/media.tar.gz
+```
+
+### Deploying later releases
+
+A later release of the code needs only some of the blocks above. Run the **Variables** blocks, the **Resource sizing** block, and the **Deployment settings** block with `DB_DUMP_FILE` and `MEDIA_ARCHIVE_FILE` left empty, then **Get the code**, **Composer**, **Build**, **File permissions**, and **Go live**. Also run **Magento's Nginx configuration** and the **Varnish** block after a Magento upgrade, and the **Indexers** block when a release adds or changes indexers. The database and media are imported only once: never run the **Data** blocks against a live store, because they replace its orders, customers, and images.
 
 ## Part 7: Reset file permissions
 
