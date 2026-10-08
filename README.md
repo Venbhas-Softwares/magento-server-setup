@@ -33,7 +33,7 @@ Make sure the following are in place before you open VS Code:
 - **Enough disk space on each server.** AWS's default 8 GB root volume is too small, because Ubuntu and the base packages already use most of it, and the OpenSearch package alone needs about 2.6 GB free while it installs. Plan for roughly 30 GB on an OpenSearch server, 30 to 50 GB on a database server, and 40 to 60 GB on an app server, with more for a large catalogue or many product images. A volume can be enlarged later without downtime, but it cannot be shrunk.
 - **The private key for each server**, for example the `.pem` file that AWS gave you when the instance was created.
 - **Each server's public IP address or DNS name**, and, with separate servers, each server's private IP address, which the servers use to reach each other.
-- **Access to this repository on GitHub**, so that you can download the runbook.
+- **Outbound internet access from each server**, which the runbook needs anyway for its packages, so that each server can download the runbook from GitHub.
 - **A domain name**, if the app server will get its own certificate (`SSL_MODE=letsencrypt`). DNS records for both the domain and its `www` name must point to the app server before you reach the HTTPS section, because the certificate covers both names.
 
 You also need an SSH key pair that belongs to this computer. The runbook installs its public half on the app server, so that you can log in as the restricted web user. If you do not have one yet, create it in the macOS Terminal:
@@ -74,7 +74,7 @@ mv ~/Downloads/YOUR_KEY.pem ~/.ssh/
 chmod 400 ~/.ssh/YOUR_KEY.pem
 ```
 
-Next, add an entry for each server to `~/.ssh/config`. A named entry lets both VS Code and the Terminal connect with a short alias, and it keeps the connection alive during long installation steps. With a single server, the `app-server` entry is the only one you need.
+Next, add an entry for each server to `~/.ssh/config`. VS Code's Remote - SSH extension lists these entries when it connects in step 5, and the `ServerAlive` settings keep the connection alive during long installation steps. With a single server, the `app-server` entry is the only one you need.
 
 ```text
 Host app-server
@@ -99,26 +99,29 @@ Host opensearch-server
     ServerAliveCountMax 6
 ```
 
-Finally, confirm that a plain SSH login works for each server before you involve VS Code. Type `yes` if SSH asks you to confirm the server's fingerprint, and then type `exit` to close the session.
+Finally, confirm that a plain SSH login works for each server before you involve VS Code. Replace the key name and the address with your own, and repeat the command for each server. Type `yes` if SSH asks you to confirm the server's fingerprint, and then type `exit` to close the session.
 
 ```bash
-ssh app-server
+ssh -i ~/.ssh/YOUR_KEY.pem ubuntu@APP_SERVER_IP_OR_DNS
 ```
 
 If this command fails, VS Code will fail in the same way, so fix the problem here first. The most common causes are a security group that does not allow port 22 from your IP address, the wrong user name, and incorrect key permissions.
 
-## 4. Copy the runbook to each server
+## 4. Download the runbook to each server
 
-The runbook has to be opened from the server's file system so that its blocks run there. The simplest approach is to clone the repository on your computer and copy the single file to each server:
+The runbook has to be opened from the server's file system so that its blocks run there. It is a single file in a public repository, so each server can download it directly, without cloning the repository and without a GitHub key. Run this command on your computer, with your own key name and the server's address:
 
 ```bash
-git clone git@github.com:Venbhas-Softwares/magento-server-setup.git
-scp magento-server-setup/magento-server-setup-runbook.md app-server:~/
-scp magento-server-setup/magento-server-setup-runbook.md db-server:~/
-scp magento-server-setup/magento-server-setup-runbook.md opensearch-server:~/
+ssh -i ~/.ssh/YOUR_KEY.pem ubuntu@APP_SERVER_IP_OR_DNS 'curl -fsSLO https://raw.githubusercontent.com/Venbhas-Softwares/magento-server-setup/main/magento-server-setup-runbook.md'
 ```
 
-Cloning on your computer means the new servers never need access to GitHub. If you prefer to clone directly on a server, you must first set up a GitHub key there. Whenever the runbook in the repository changes, copy it to the servers again and reopen it in VS Code, so that Runme runs the current version.
+The command logs in to the server, downloads the runbook into the `ubuntu` user's home folder, and logs out again. When the database and OpenSearch run on their own servers, run it again with each of their addresses. If you already have a terminal open on the server, run only the `curl` command:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Venbhas-Softwares/magento-server-setup/main/magento-server-setup-runbook.md
+```
+
+Whenever the runbook in the repository changes, run the command again and reopen the file in VS Code, so that Runme runs the current version. GitHub can take a few minutes to serve a newly pushed version.
 
 ## 5. Open the runbook in a remote VS Code window
 
@@ -146,7 +149,7 @@ Read the "How to use it" section at the top of the runbook first. The points bel
 
 **Re-run the setup blocks after any restart.** Variables last only as long as the current Runme session. If you reload the window, reconnect after a reboot, or restart VS Code, run this server's **Variables** blocks and the **Resource sizing** block again before continuing. Any block that needs a missing variable stops with a clear error rather than running with an empty value.
 
-**Paste your public key.** In the "Restricted user and web root" section on the app server, replace the placeholder `PUBKEY` value with the public key you printed in step 1 before you run that block.
+**Paste your public key.** In the "Restricted user and web root" section on the app server, Runme asks for `PUBKEY`. Paste the public key you printed in step 1. The block refuses a value that is not a valid public key.
 
 **Handle the interactive block.** `sudo mariadb-secure-installation` on the database server asks a series of questions. Runme shows them in the block's output area, and you answer them by typing there. If the output area does not accept input, open a terminal in the remote window (`` Ctrl+` ``) and run the command there instead.
 
@@ -156,7 +159,7 @@ Read the "How to use it" section at the top of the runbook first. The points bel
 
 **Protect the generated passwords.** Several blocks print a password exactly once. Copy each one into your password manager immediately, and then clear the output with the block's **Clear Output** action. Do not save the notebook with its outputs, and never commit a copy of the runbook that contains them.
 
-**Run the SSH hardening carefully.** The SSH hardening section disables password and root logins. Before you restart `ssh`, open a second Terminal on your computer and confirm that `ssh app-server` (or the alias of the server you are working on) still works. Your `ubuntu` user keeps working because it logs in with a key, so the remote VS Code window is not affected.
+**Run the SSH hardening carefully.** The SSH hardening section disables password and root logins. Before you restart `ssh`, open a second Terminal on your computer and confirm that `ssh -i ~/.ssh/YOUR_KEY.pem ubuntu@SERVER_IP_OR_DNS`, with the key and address of the server you are working on, still works. Your `ubuntu` user keeps working because it logs in with a key, so the remote VS Code window is not affected.
 
 ## 7. After the runbook is finished
 
@@ -166,18 +169,7 @@ The phpMyAdmin tunnel command in the runbook runs on **your computer**, not on t
 ssh -i ~/.ssh/id_ed25519 -N -L 8090:127.0.0.1:8090 webuser@APP_SERVER_IP_OR_DNS
 ```
 
-To shorten the command, add an entry for the restricted user to `~/.ssh/config`, next to the entries from step 3:
-
-```text
-Host app-web
-    HostName APP_SERVER_IP_OR_DNS
-    User webuser
-    IdentityFile ~/.ssh/id_ed25519
-    ServerAliveInterval 30
-    ServerAliveCountMax 6
-```
-
-The tunnel then becomes `ssh -N -L 8090:127.0.0.1:8090 app-web`. On Windows, the same file lives at `%USERPROFILE%\.ssh\config`, and the command is identical in PowerShell.
+On Windows, the command is the same in PowerShell, with the key path written as `$HOME\.ssh\id_ed25519`.
 
 To log in to the app server as the restricted web user, use the key you created in step 1. Replace `webuser` with the value of `WEB_USER` if you changed it.
 
@@ -200,8 +192,8 @@ When you no longer need it, you can delete the runbook copy from each server wit
 | A block stops with `Skip this block`. | The block belongs to another kind of server. Skip it, or check the **Server role** values if this server should run that service. |
 | A block keeps running and its output ends with `lines 1-9` or similar. | The output is open in the `less` pager. Click into the output area and press `q`. |
 | `apt` or `dpkg` fails with `No space left on device`. | The root volume is too small. Run `sudo apt clean`, enlarge the volume in the AWS console, grow the filesystem with `sudo growpart /dev/nvme0n1 1` and `sudo resize2fs /dev/nvme0n1p1` (check the names with `lsblk`), run `sudo apt -f install`, and then rerun the failed block. |
-| VS Code cannot connect to the host. | Run `ssh <alias>` in the Terminal to see the real error, and check the security group, user name, and key permissions. |
-| `ssh webuser@<server>` fails with `Permission denied (publickey)`, although the key is in `authorized_keys`. | An entry in `~/.ssh/config` matches the server's address and sets an `IdentityFile`, so SSH offers only that key (the `ubuntu` key) and never tries your own. `ssh -v` shows which keys it offers. Name your key with `-i ~/.ssh/<your key>`, or add a separate entry for the restricted user, such as `app-web` in step 7. |
+| VS Code cannot connect to the host. | Run `ssh -v -i ~/.ssh/YOUR_KEY.pem ubuntu@SERVER_IP_OR_DNS` in the Terminal to see the real error, and check the security group, user name, and key permissions. |
+| `ssh webuser@<server>` fails with `Permission denied (publickey)`, although the key is in `authorized_keys`. | An entry in `~/.ssh/config` matches the server's address and sets an `IdentityFile`, so SSH offers only that key (the `ubuntu` key) and never tries your own. `ssh -v` shows which keys it offers. Name your own key in the command, as in `ssh -i ~/.ssh/id_ed25519 webuser@APP_SERVER_IP_OR_DNS`. |
 | The connection drops during a long install. | Make sure `ServerAliveInterval` is set in `~/.ssh/config`, reconnect, rerun the setup blocks, and then rerun the interrupted block. |
 | `apt` reports that it cannot get a lock. | Ubuntu's automatic updates are still running on a newly launched server. Wait a few minutes and run the block again. |
 | The application cannot write a file, or a deployment cannot replace one. | The web root's permissions have drifted. Run Part 7 of the runbook on that server. |
