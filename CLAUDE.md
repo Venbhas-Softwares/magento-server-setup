@@ -14,10 +14,10 @@ The runbook is grouped by server role, and each server runs only the parts that 
 
 | Part | Runs on | Contents |
 |---|---|---|
-| 1 | Every server, first | System update, kernel settings, Variables blocks (Server role, App server settings, Database and OpenSearch server settings), Resource sizing |
+| 1 | Every server, first | System update, Variables blocks (Server role, App server settings, Database and OpenSearch server settings), Resource sizing |
 | 2 | Database server (`INSTALL_MARIADB=yes`) | MariaDB 12.3 from the MariaDB repository, tuning, application database and user |
-| 3 | OpenSearch server (`INSTALL_OPENSEARCH=yes`) | OpenSearch 3.x, ICU and phonetic plugins, systemd drop-in settings |
-| 4 | App server (`INSTALL_APP=yes`) | Restricted user, web root and file permission model, PHP 8.5, Nginx 1.28, Valkey 9 (two instances), Varnish 7.7, Composer 2.10, phpMyAdmin, HTTPS |
+| 3 | OpenSearch server (`INSTALL_OPENSEARCH=yes`) | OpenSearch 3.x, ICU and phonetic plugins, memory map limit, systemd drop-in settings |
+| 4 | App server (`INSTALL_APP=yes`) | Restricted user, web root and file permission model, PHP 8.5, Nginx 1.28, Valkey 9 (two instances, memory overcommit), Varnish 7.7, Composer 2.10, phpMyAdmin, HTTPS |
 | 5 | Every server, to finish | UFW, SSH hardening, Fail2ban, unattended upgrades, final verification |
 | 6 | App server, after Magento is deployed | Connection options for `setup:install`, Magento's Nginx configuration, Magento's VCL, cron |
 | 7 | Any app server with drifted permissions | Self-contained reset of web root ownership and modes, plus the settings that stop the drift returning |

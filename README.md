@@ -160,11 +160,24 @@ Read the "How to use it" section at the top of the runbook first. The points bel
 
 ## 7. After the runbook is finished
 
-The phpMyAdmin tunnel command in the runbook runs on **your computer**, not on the server. Run it in the macOS Terminal, keep that window open, and browse to `http://localhost:8090`. With the SSH config entry from step 3, the command shortens to:
+The phpMyAdmin tunnel command in the runbook runs on **your computer**, not on the server. Run it in a terminal (Terminal on macOS or Linux, PowerShell on Windows), keep that window open, and browse to `http://localhost:8090`. The tunnel logs in as the restricted web user with your own key, so you never need the `ubuntu` account's key for it, and neither does any other developer. Replace `webuser` with the value of `WEB_USER` if you changed it.
 
 ```bash
-ssh -N -L 8090:127.0.0.1:8090 app-server
+ssh -i ~/.ssh/id_ed25519 -N -L 8090:127.0.0.1:8090 webuser@APP_SERVER_IP_OR_DNS
 ```
+
+To shorten the command, add an entry for the restricted user to `~/.ssh/config`, next to the entries from step 3:
+
+```text
+Host app-web
+    HostName APP_SERVER_IP_OR_DNS
+    User webuser
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+```
+
+The tunnel then becomes `ssh -N -L 8090:127.0.0.1:8090 app-web`. On Windows, the same file lives at `%USERPROFILE%\.ssh\config`, and the command is identical in PowerShell.
 
 To log in to the app server as the restricted web user, use the key you created in step 1. Replace `webuser` with the value of `WEB_USER` if you changed it.
 
@@ -188,6 +201,7 @@ When you no longer need it, you can delete the runbook copy from each server wit
 | A block keeps running and its output ends with `lines 1-9` or similar. | The output is open in the `less` pager. Click into the output area and press `q`. |
 | `apt` or `dpkg` fails with `No space left on device`. | The root volume is too small. Run `sudo apt clean`, enlarge the volume in the AWS console, grow the filesystem with `sudo growpart /dev/nvme0n1 1` and `sudo resize2fs /dev/nvme0n1p1` (check the names with `lsblk`), run `sudo apt -f install`, and then rerun the failed block. |
 | VS Code cannot connect to the host. | Run `ssh <alias>` in the Terminal to see the real error, and check the security group, user name, and key permissions. |
+| `ssh webuser@<server>` fails with `Permission denied (publickey)`, although the key is in `authorized_keys`. | An entry in `~/.ssh/config` matches the server's address and sets an `IdentityFile`, so SSH offers only that key (the `ubuntu` key) and never tries your own. `ssh -v` shows which keys it offers. Name your key with `-i ~/.ssh/<your key>`, or add a separate entry for the restricted user, such as `app-web` in step 7. |
 | The connection drops during a long install. | Make sure `ServerAliveInterval` is set in `~/.ssh/config`, reconnect, rerun the setup blocks, and then rerun the interrupted block. |
 | `apt` reports that it cannot get a lock. | Ubuntu's automatic updates are still running on a newly launched server. Wait a few minutes and run the block again. |
 | The application cannot write a file, or a deployment cannot replace one. | The web root's permissions have drifted. Run Part 7 of the runbook on that server. |

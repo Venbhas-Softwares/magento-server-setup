@@ -73,14 +73,6 @@ sudo apt install -y ca-certificates curl gnupg git unzip apache2-utils
 sudo timedatectl set-timezone UTC
 ```
 
-Kernel settings: OpenSearch needs a higher memory map limit, and Valkey needs memory overcommit enabled to save its data safely. Both settings are harmless on a server that runs neither, so this block runs on every server.
-
-```bash
-printf 'vm.max_map_count = 262144\nvm.overcommit_memory = 1\n' | sudo tee /etc/sysctl.d/99-server.conf
-sudo sysctl --system > /dev/null
-sysctl vm.max_map_count vm.overcommit_memory
-```
-
 If the update installed a new kernel, reboot now, before any values are set. A reboot ends the Runme session and clears every variable, which is why this section comes first. Reconnect afterwards and continue with the **Variables** blocks.
 
 ```bash
@@ -552,6 +544,15 @@ sudo /usr/share/opensearch/bin/opensearch-plugin install --batch analysis-icu an
 sudo /usr/share/opensearch/bin/opensearch-plugin list
 ```
 
+OpenSearch maps its index files into memory and refuses to start in production mode when the kernel's memory map limit is below 262144. This block raises the limit in a file of its own under `/etc/sysctl.d/`, so it applies now and after every reboot, and it prints the value the kernel is using.
+
+```bash
+[ "${INSTALL_OPENSEARCH:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: this server has INSTALL_OPENSEARCH=$INSTALL_OPENSEARCH."; exit 1; }
+echo 'vm.max_map_count = 262144' | sudo tee /etc/sysctl.d/99-opensearch.conf
+sudo sysctl -p /etc/sysctl.d/99-opensearch.conf > /dev/null
+sysctl vm.max_map_count
+```
+
 #### OpenSearch production settings
 
 This block configures OpenSearch before its first start. It runs as a single node, uses the heap size from the sizing block, and has the security plugin disabled. Its HTTP port (9200) listens on `127.0.0.1`, and also on this server's private IP address when `APP_SERVER_IPS` is set. The internal node-to-node port (9300) stays on `127.0.0.1`, because a single node has no other nodes to talk to. Applications connect over plain HTTP without a password, which is safe only because port 9200 is never exposed beyond this server and the app servers: the security group and the firewall rules later in this runbook let no other address reach it.
@@ -611,17 +612,19 @@ sudo usermod -aG www-data "$WEB_USER"
 sudo usermod -aG "$WEB_USER" www-data
 ```
 
-Replace the key below with the public key (from your Mac) that should log in as this user.
+When Runme asks for `PUBKEY`, paste the public key of the computer that should log in as this user: the whole single line from your `.pub` file, such as `~/.ssh/id_ed25519.pub`. The block refuses anything that is not a valid public key, including the placeholder, and it adds the key only once, so you can run it again with each developer's key. It ends by listing the fingerprints of every key the restricted user accepts. Compare them with the output of `ssh-keygen -lf ~/.ssh/id_ed25519.pub` on your computer to confirm that the right key is installed.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
 : "${WEB_USER:?Run the Variables blocks first}"
-PUBKEY="ssh-ed25519 AAAA_REPLACE_WITH_YOUR_PUBLIC_KEY you@your-mac"
+export PUBKEY="ssh-ed25519 AAAA_REPLACE_WITH_YOUR_PUBLIC_KEY you@your-computer"
+echo "$PUBKEY" | ssh-keygen -lf - > /dev/null 2>&1 || { echo "PUBKEY is not a valid SSH public key. Paste the whole line from your .pub file."; exit 1; }
 sudo install -d -m 700 -o "$WEB_USER" -g "$WEB_USER" "/home/$WEB_USER/.ssh"
 sudo touch "/home/$WEB_USER/.ssh/authorized_keys"
 sudo grep -qxF "$PUBKEY" "/home/$WEB_USER/.ssh/authorized_keys" || echo "$PUBKEY" | sudo tee -a "/home/$WEB_USER/.ssh/authorized_keys" > /dev/null
 sudo chown "$WEB_USER:$WEB_USER" "/home/$WEB_USER/.ssh/authorized_keys"
 sudo chmod 600 "/home/$WEB_USER/.ssh/authorized_keys"
+sudo ssh-keygen -lf "/home/$WEB_USER/.ssh/authorized_keys"
 ```
 
 Generate a Git deploy key for the restricted user. Add the printed public key to your Git repository as a read-only deploy key.
@@ -819,13 +822,12 @@ nginx -v
 
 Ubuntu's Nginx runs as `www-data`, the same account as PHP-FPM, and already ships the `snippets/fastcgi-php.conf` file that the PHP blocks below include. Each site (vhost) follows Ubuntu's convention: its file goes in `/etc/nginx/sites-available/`, and a link in `/etc/nginx/sites-enabled/` turns it on, so you can disable a site by removing its link without deleting its configuration. Settings that apply to every site, such as the two blocks below, go in `/etc/nginx/conf.d/`. Ubuntu's `nginx.conf` loads both folders, so the package's own files are never edited.
 
-Global settings: hide the Nginx version, allow 64 MB uploads, and trust the visitor IP address forwarded by Varnish, the HTTPS proxy, and (with `SSL_MODE=off`) the load balancer ranges in `TRUSTED_PROXY_CIDRS`. The `map` lets PHP know when the original request used HTTPS.
+Global settings: hide the Nginx version, allow 64 MB uploads, and trust the visitor IP address forwarded by Varnish, the HTTPS proxy, and (with `SSL_MODE=off`) the load balancer ranges in `TRUSTED_PROXY_CIDRS`. The `map` lets PHP know when the original request used HTTPS. Ubuntu 26.04's `nginx.conf` already turns `server_tokens` off, and Nginx refuses to start when the directive appears twice, so the block adds it only when the package's file does not set it. The last lines print the trusted addresses and the `server_tokens` value Nginx actually uses.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
 : "${SSL_MODE:?Run the Variables blocks first}"
 sudo tee /etc/nginx/conf.d/00-server.conf > /dev/null <<'EOF'
-server_tokens off;
 client_max_body_size 64m;
 
 # Real visitor IP: requests reach the application through Varnish on 127.0.0.1
@@ -844,7 +846,11 @@ if [ "$SSL_MODE" = off ]; then
     echo "set_real_ip_from $CIDR;" | sudo tee -a /etc/nginx/conf.d/00-server.conf > /dev/null
   done
 fi
+if ! grep -qE '^\s*server_tokens\s' /etc/nginx/nginx.conf; then
+  echo "server_tokens off;" | sudo tee -a /etc/nginx/conf.d/00-server.conf > /dev/null
+fi
 grep set_real_ip_from /etc/nginx/conf.d/00-server.conf
+sudo nginx -t && sudo nginx -T 2>/dev/null | grep -E '^\s*server_tokens\s'
 ```
 
 Define the PHP-FPM upstream under the name `fastcgi_backend`. Magento's own Nginx configuration (`nginx.conf.sample`) sends PHP requests to an upstream with exactly that name, so defining it here lets you switch to Magento's configuration later without further changes.
@@ -940,6 +946,15 @@ sudo systemctl disable --now valkey-server
 valkey-server --version
 ```
 
+The sessions instance saves its data to disk from a forked child process. Without memory overcommit, the kernel can refuse that fork when free memory is low, and the save fails, which is why Valkey warns about this setting at startup. This block enables overcommit in a file of its own under `/etc/sysctl.d/`, so it applies now and after every reboot, and it prints the value the kernel is using.
+
+```bash
+[ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VALKEY" = yes ] || { echo "Skip this block: this server does not run Valkey."; exit 1; }
+echo 'vm.overcommit_memory = 1' | sudo tee /etc/sysctl.d/99-valkey.conf
+sudo sysctl -p /etc/sysctl.d/99-valkey.conf > /dev/null
+sysctl vm.overcommit_memory
+```
+
 This block writes both configuration files with one generated password and the memory sizes from the sizing block, then starts both instances. Both listen on `127.0.0.1` only. The files belong to the `valkey` user with mode `640`, so no other unprivileged account can read the password. Running the block again sets a new password.
 
 ```bash
@@ -1004,6 +1019,8 @@ varnishd -V
 
 This block takes the package's own start command and changes only the listening address and the cache size, so every other packaged option stays intact. When this server handles HTTPS (`SSL_MODE` is `letsencrypt` or `custom`), Varnish listens on `127.0.0.1:6081`, where only the HTTPS vhost on port 443 can reach it, and Nginx's port 80 redirects visitors to HTTPS. With `SSL_MODE=off`, Varnish listens on port 80, where the load balancer connects to it. It also raises three limits, following Adobe's guidance: Magento sends long `X-Magento-Tags` headers on category pages, and with Varnish's defaults (8 KB of headers) these pages fail with "503 Backend fetch failed". The package's default VCL already forwards requests to Nginx on `127.0.0.1:8080`. Once Magento's VCL has been installed as `/etc/varnish/magento.vcl` (see the **Magento 2.4.9 configuration** section), this block points Varnish at that file instead, so running it again never switches Varnish back to the default VCL. The settings live in a systemd drop-in file, and the package's own `default.vcl` is never edited, so both survive package upgrades.
 
+The block reads the start command from the package's unit file rather than from an earlier drop-in, so running it again never stacks options twice. When the unit file splits the command across several lines with trailing backslashes, the block joins them first, and it replaces the listening address in whatever form the package writes it (`:6081` or `localhost:6081`). If any of the three substitutions does not take effect, the block stops before changing anything and prints the package's start command. Otherwise it ends by showing the start command systemd now uses and whether Varnish is running.
+
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] && [ "$INSTALL_VARNISH" = yes ] || { echo "Skip this block: this server does not run Varnish."; exit 1; }
 : "${VARNISH_CACHE_MB:?Run the Resource sizing block first}"
@@ -1012,16 +1029,23 @@ VARNISH_LISTEN="127.0.0.1:6081"
 [ "$SSL_MODE" = off ] && VARNISH_LISTEN=":80"
 VCL=/etc/varnish/default.vcl
 [ -f /etc/varnish/magento.vcl ] && VCL=/etc/varnish/magento.vcl
-EXEC=$(systemctl cat varnish.service | grep -m1 '^ExecStart=/' \
-  | sed -E "s/-a :?[0-9]+( |$)/-a $VARNISH_LISTEN\1/; s/malloc,[0-9]+[kKmMgG]?/malloc,${VARNISH_CACHE_MB}m/; s#-f [^ ]+#-f $VCL#")
-EXEC="$EXEC -p http_resp_hdr_len=65536 -p http_resp_size=98304 -p workspace_backend=131072"
-echo "$EXEC" | grep -q -- "-a $VARNISH_LISTEN " || { echo "Could not set the listening address. Check: systemctl cat varnish"; false; } && {
-  sudo mkdir -p /etc/systemd/system/varnish.service.d
-  printf "[Service]\nExecStart=\n%s\n" "$EXEC" | sudo tee /etc/systemd/system/varnish.service.d/override.conf
-  sudo systemctl daemon-reload
-  sudo systemctl enable varnish
-  sudo systemctl restart varnish
-}
+UNIT_FILE=$(systemctl show -P FragmentPath varnish.service)
+EXEC=$(awk '{ if (sub(/\\$/, "")) printf "%s ", $0; else print }' "$UNIT_FILE" | grep -m1 '^ExecStart=/' | tr -s ' \t' ' ')
+NEW=$(echo "$EXEC" | sed -E "s/ -a [^ ]+/ -a $VARNISH_LISTEN/; s/ -s [^ ]+/ -s malloc,${VARNISH_CACHE_MB}m/; s# -f [^ ]+# -f $VCL#")
+for OPT in "-a $VARNISH_LISTEN" "-s malloc,${VARNISH_CACHE_MB}m" "-f $VCL"; do
+  case "$NEW " in
+    *" $OPT "*) ;;
+    *) echo "Could not set '$OPT'. The start command in $UNIT_FILE is:"; echo "$EXEC"; exit 1 ;;
+  esac
+done
+NEW="$NEW -p http_resp_hdr_len=65536 -p http_resp_size=98304 -p workspace_backend=131072"
+sudo mkdir -p /etc/systemd/system/varnish.service.d
+printf "[Service]\nExecStart=\n%s\n" "$NEW" | sudo tee /etc/systemd/system/varnish.service.d/override.conf
+sudo systemctl daemon-reload
+sudo systemctl enable varnish
+sudo systemctl restart varnish
+systemctl show -P ExecStart varnish.service | grep -o 'argv\[\]=[^;]*'
+echo "varnish: $(systemctl is-active varnish)"
 ```
 
 Confirm that Varnish is answering on its address (`127.0.0.1:6081`, or port 80 with `SSL_MODE=off`). The response code may be 403 or 404 because the web root is still empty, which is fine; the important part is that the headers include `Via` with `varnish`.
@@ -1207,11 +1231,13 @@ sudo ln -sf /etc/nginx/sites-available/phpmyadmin /etc/nginx/sites-enabled/phpmy
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-To open phpMyAdmin, run this on your Mac (with your own key and server address), keep the terminal open, and browse to `http://localhost:8090`:
+To open phpMyAdmin, run this on your own computer, keep the terminal open, and browse to `http://localhost:8090`. It logs in as the restricted user with your own SSH key, so nobody needs the `ubuntu` account's key, which has full sudo access. The tunnel only needs an account that can log in over SSH, and it gives no more access than an ordinary login as that user. To let another developer open the tunnel, add their public key to the restricted user's `authorized_keys`, as the **Restricted user and web root** section does for yours. Replace `webuser` with the value of `WEB_USER` if you changed it.
 
 ```text
-ssh -i ~/.ssh/YOUR_KEY.pem -N -L 8090:127.0.0.1:8090 ubuntu@SERVER_IP
+ssh -i ~/.ssh/id_ed25519 -N -L 8090:127.0.0.1:8090 webuser@SERVER_IP
 ```
+
+The command is the same on macOS, Linux, and Windows 10 or 11, which include the OpenSSH client. Only the key path differs: in Windows PowerShell, write it as `$HOME\.ssh\id_ed25519`, and in Command Prompt as `%USERPROFILE%\.ssh\id_ed25519`. In VS Code, you can open the same tunnel without a terminal: connect to the server as the restricted user with Remote - SSH, then add port `8090` in the **Ports** panel.
 
 Log in with the application database user created in the MariaDB section. The MariaDB root account uses Unix socket authentication and cannot log in through phpMyAdmin, which is intentional. When the database runs on its own server, the login works because the MariaDB section created the user for this app server's address.
 
