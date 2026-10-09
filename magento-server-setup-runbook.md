@@ -2008,7 +2008,9 @@ This block puts the store into maintenance mode and builds it for production, in
 3. `setup:di:compile` generates the dependency injection code.
 4. `setup:static-content:deploy` builds the static files for every locale the store uses (read from the database, plus `en_US` and the admin users' interface locales) on every CPU core.
 
-Before these steps, the block repairs the web root's permissions in the same way as **Magento's environment and store settings**, because `setup:upgrade` stops on a folder that the restricted user cannot write to. The block stops at the first command that fails, and the store then stays in maintenance mode while you fix the problem and run the block again. Compilation and static content deployment take several minutes on a typical store.
+Before these steps, the block stops PHP-FPM and cron for the duration of the build. Maintenance mode alone does not stop either of them from running Magento code: a web request bootstraps Magento before it checks for maintenance mode, and Magento's cron jobs ignore it entirely. Either one can then write a new class into `generated/code` while `setup:di:compile` is deleting that folder, and the compilation fails with `The directory ... generated/code/Magento cannot be deleted` and `Directory not empty`. While PHP-FPM is stopped, visitors get a `502` or `503` error instead of Magento's maintenance page. The block waits for any Magento cron job that is still running to finish, and then repairs the web root's permissions in the same way as **Magento's environment and store settings**, because `setup:upgrade` stops on a folder that the restricted user cannot write to.
+
+The block stops at the first command that fails, and the store then stays in maintenance mode, with PHP-FPM and cron stopped, while you fix the problem and run the block again. When the build succeeds, the block starts PHP-FPM and cron again while the store stays in maintenance mode. PHP-FPM must be running before the **Varnish** block, because Magento's health check at `/health_check.php` is a PHP script: while PHP-FPM is stopped, Nginx answers it with `502`, and Varnish answers every visitor with "503 Backend fetch failed". The health check does not look at maintenance mode, so it passes while visitors still see the maintenance page. Compilation and static content deployment take several minutes on a typical store.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
@@ -2016,12 +2018,19 @@ Before these steps, the block repairs the web root's permissions in the same way
 R="/var/www/$DOMAIN_NAME"
 cd "$R" || exit 1
 J="$(nproc)"
+sudo systemctl stop "php$PHP_VERSION-fpm" cron
+for i in $(seq 120); do
+  pgrep -u "$WEB_USER" -f 'bin/magento cron:run' > /dev/null || break
+  [ "$i" = 1 ] && echo "Waiting for running Magento cron jobs to finish..."
+  sleep 5
+done
+pgrep -u "$WEB_USER" -f 'bin/magento cron:run' > /dev/null && { echo "ERROR: Magento cron jobs are still running after 10 minutes. Stop them, then run this block again."; exit 1; }
 sudo find -H "$R" \( \( ! -user "$WEB_USER" ! -user www-data \) -o ! -group www-data \) -print0 \
   | sudo xargs -0 -r -P "$J" -n 500 chown -h "$WEB_USER:www-data"
 sudo find -H "$R" -type d ! -perm 2775 -print0 | sudo xargs -0 -r -P "$J" -n 500 chmod 2775
 sudo find -H "$R" -type f ! -name '*.sh' ! -path '*/bin/*' ! -perm 664 -print0 | sudo xargs -0 -r -P "$J" -n 500 chmod 664
 sudo find -H "$R" -type f \( -name '*.sh' -o -path '*/bin/*' \) ! -perm 775 -print0 | sudo xargs -0 -r -P "$J" -n 500 chmod 775
-M() { sudo -u "$WEB_USER" php bin/magento "$@" || { echo "ERROR: bin/magento $1 failed. The store stays in maintenance mode."; exit 1; }; }
+M() { sudo -u "$WEB_USER" php bin/magento "$@" || { echo "ERROR: bin/magento $1 failed. The store stays in maintenance mode, with PHP-FPM and cron stopped."; exit 1; }; }
 PREFIX="$(sudo -u "$WEB_USER" php -r 'echo (include "app/etc/env.php")["db"]["table_prefix"] ?? "";')"
 
 M maintenance:enable
@@ -2034,6 +2043,8 @@ LOCALES=$( { echo en_US
 echo "Deploying static content for: $LOCALES"
 M setup:static-content:deploy $LOCALES --jobs "$(nproc)"
 M deploy:mode:show
+sudo systemctl start "php$PHP_VERSION-fpm" cron
+echo "php$PHP_VERSION-fpm: $(systemctl is-active "php$PHP_VERSION-fpm"), cron: $(systemctl is-active cron)"
 ```
 
 ### Varnish
@@ -2131,7 +2142,7 @@ echo "Executables that are not 775:  $(sudo find -H "$R" -type f \( -name '*.sh'
 
 ### Go live
 
-This block restarts PHP-FPM, which is required after every deployment because OPcache never checks for changed files in production. It then flushes Magento's caches, which also purges Varnish, and takes the store out of maintenance mode. Finally, it requests the home page and the admin login page the way a visitor would, through HTTPS (or through the load balancer's path with `SSL_MODE=off`), and with Varnish it requests the home page a second time to confirm that Varnish served it from its cache.
+This block restarts PHP-FPM, which is required after every deployment because OPcache never checks for changed files in production. It also makes sure that cron is running. It then flushes Magento's caches, which also purges Varnish, and takes the store out of maintenance mode. Finally, it requests the home page and the admin login page the way a visitor would, through HTTPS (or through the load balancer's path with `SSL_MODE=off`), and with Varnish it requests the home page a second time to confirm that Varnish served it from its cache.
 
 ```bash
 [ "${INSTALL_APP:?Run the Variables blocks first}" = yes ] || { echo "Skip this block: it is for the app server, and this server has INSTALL_APP=$INSTALL_APP."; exit 1; }
@@ -2139,6 +2150,7 @@ This block restarts PHP-FPM, which is required after every deployment because OP
 cd "/var/www/$DOMAIN_NAME" || exit 1
 M() { sudo -u "$WEB_USER" php bin/magento "$@" || { echo "ERROR: bin/magento $1 failed."; exit 1; }; }
 sudo systemctl restart "php$PHP_VERSION-fpm"
+sudo systemctl start cron
 M cache:flush
 M maintenance:disable
 sleep 2
